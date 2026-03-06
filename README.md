@@ -133,6 +133,38 @@ Key names are validated to prevent path traversal — only `[a-zA-Z0-9._-]` char
 
 ## Requirements
 
-- [Bun](https://bun.sh)
-- [GnuPG](https://gnupg.org/) (`gpg`)
-- [pass](https://www.passwordstore.org/) (for `init`/`set`/`remove`)
+fio-vault requires three system dependencies. A postinstall check warns you if any are missing.
+
+### Bun
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+### GnuPG (`gpg`)
+
+```bash
+# macOS
+brew install gnupg
+
+# Ubuntu / Debian
+sudo apt install gnupg
+
+# Arch
+sudo pacman -S gnupg
+```
+
+### pass
+
+```bash
+# macOS
+brew install pass
+
+# Ubuntu / Debian
+sudo apt install pass
+
+# Arch
+sudo pacman -S pass
+```
+
+`pass` is only required for CLI commands (`init`, `set`, `remove`). The library API can decrypt secrets directly with GPG using `FIO_VAULT_PASSPHRASE`.

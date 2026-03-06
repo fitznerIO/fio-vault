@@ -11,7 +11,8 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "postinstall": "bun scripts/postinstall.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
