@@ -1,0 +1,20 @@
+{
+  "name": "fio-vault",
+  "version": "0.1.0",
+  "description": "GPG-based secret management for Bun projects",
+  "type": "module",
+  "bin": {
+    "fio-vault": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7"
+  }
+}
