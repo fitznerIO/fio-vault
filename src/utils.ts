@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 const KEY_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
@@ -14,6 +15,11 @@ export function validateKey(key: string): void {
 /** Convert kebab-case key to SCREAMING_SNAKE_CASE env var name. */
 export function keyToEnvVar(key: string): string {
   return key.replace(/-/g, "_").toUpperCase();
+}
+
+/** Resolve the global vault directory (~/.fio-vault/). */
+export function getGlobalVaultDir(): string {
+  return join(homedir(), ".fio-vault");
 }
 
 /** Resolve the vault directory for a given project root. */

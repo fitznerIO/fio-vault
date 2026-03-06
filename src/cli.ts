@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createInterface } from "readline";
 import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured, decrypt } from "./gpg";
-import { keyToEnvVar, getVaultDir, getManifestPath, validateKey } from "./utils";
+import { keyToEnvVar, getVaultDir, getGlobalVaultDir, getManifestPath, validateKey } from "./utils";
 import { listKeys } from "./vault";
 
 // --- Helpers ---
@@ -21,15 +21,15 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-function vaultEnv(cwd: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
-  return { ...process.env, PASSWORD_STORE_DIR: getVaultDir(cwd), ...extra };
+function vaultEnv(vaultDir: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
+  return { ...process.env, PASSWORD_STORE_DIR: vaultDir, ...extra };
 }
 
-async function passInsert(key: string, value: string, cwd: string): Promise<{ ok: boolean; error?: string }> {
+async function passInsert(key: string, value: string, vaultDir: string): Promise<{ ok: boolean; error?: string }> {
   const proc = Bun.spawn(
     ["sh", "-c", `printf '%s\\n' "$_FIO_SECRET" | pass insert --force --multiline "${key}"`],
     {
-      env: vaultEnv(cwd, { _FIO_SECRET: value }),
+      env: vaultEnv(vaultDir, { _FIO_SECRET: value }),
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -41,23 +41,29 @@ async function passInsert(key: string, value: string, cwd: string): Promise<{ ok
   return { ok: false, error: stderr.trim() || "unknown error" };
 }
 
+/** Resolve the effective vault directory based on --global flag. */
+function resolveVaultDir(cwd: string, isGlobal: boolean): string {
+  return isGlobal ? getGlobalVaultDir() : getVaultDir(cwd);
+}
+
 // --- Commands ---
 
-async function cmdInit(cwd: string) {
+async function cmdInit(cwd: string, isGlobal: boolean) {
   if (!(await isPassAvailable())) {
     console.error("pass is not installed. Install with: brew install pass (macOS) or apt install pass (Linux)");
     process.exit(1);
   }
 
-  const vaultDir = getVaultDir(cwd);
+  const vaultDir = resolveVaultDir(cwd, isGlobal);
   const gpgIdFile = join(vaultDir, ".gpg-id");
   const vaultExists = existsSync(gpgIdFile);
+  const label = isGlobal ? "Global vault" : "Vault";
 
   let email: string;
 
   if (vaultExists) {
     email = (await readFile(gpgIdFile, "utf-8")).trim();
-    console.log(`Vault exists (Key: ${email}). Secrets will be overwritten.\n`);
+    console.log(`${label} exists (Key: ${email}). Secrets will be overwritten.\n`);
   } else {
     console.log("1/3  Generate GPG key...\n");
     const name = (await prompt("  Name (Enter = Vault): ")) || "Vault";
@@ -90,7 +96,7 @@ async function cmdInit(cwd: string) {
     mkdirSync(vaultDir, { recursive: true });
     console.log("\n2/3  Initialize vault...");
     const initProc = Bun.spawn(["pass", "init", email], {
-      env: vaultEnv(cwd),
+      env: vaultEnv(vaultDir),
       stdin: "inherit",
       stdout: "pipe",
       stderr: "pipe",
@@ -101,7 +107,7 @@ async function cmdInit(cwd: string) {
       console.error(stderr.trim());
       process.exit(1);
     }
-    console.log(`  Vault created in: ${vaultDir}`);
+    console.log(`  ${label} created in: ${vaultDir}`);
 
     console.log("\n3/3  Export GPG private key...");
     const keyFile = join(vaultDir, "vault.key");
@@ -123,7 +129,8 @@ async function cmdInit(cwd: string) {
   }
 
   // Store secrets from manifest
-  const manifest = await loadManifest(cwd);
+  const manifestCwd = isGlobal ? getGlobalVaultDir() : cwd;
+  const manifest = await loadManifest(manifestCwd);
   if (Object.keys(manifest).length > 0) {
     console.log("\nStore secrets (empty input skips):\n");
     for (const [key, envVar] of Object.entries(manifest)) {
@@ -132,32 +139,41 @@ async function cmdInit(cwd: string) {
         console.log(`    -> skipped`);
         continue;
       }
-      const { ok, error } = await passInsert(key, value, cwd);
+      const { ok, error } = await passInsert(key, value, vaultDir);
       console.log(ok ? `    -> stored` : `    -> Error: ${error}`);
     }
   }
 
   console.log("\nDone!");
-  if (!vaultExists) {
+  if (!vaultExists && !isGlobal) {
     console.log("Next steps:");
     console.log("  1. git add vault/ && git commit -m 'feat: vault with encrypted secrets'");
     console.log("  2. Store passphrase in your password manager");
   }
 }
 
-async function cmdSet(key: string, envVar: string | undefined, cwd: string) {
+async function cmdSet(key: string, envVar: string | undefined, cwd: string, isGlobal: boolean) {
   if (!(await isPassAvailable())) {
     console.error("pass is not installed. Install with: brew install pass (macOS) or apt install pass (Linux)");
     process.exit(1);
   }
 
+  const vaultDir = resolveVaultDir(cwd, isGlobal);
+  const manifestCwd = isGlobal ? getGlobalVaultDir() : cwd;
+
+  // Ensure global vault directory exists
+  if (isGlobal && !existsSync(vaultDir)) {
+    mkdirSync(vaultDir, { recursive: true });
+  }
+
   const resolvedEnvVar = envVar ?? keyToEnvVar(key);
-  const manifest = await loadManifest(cwd);
+  const manifest = await loadManifest(manifestCwd);
   const isUpdate = key in manifest;
   manifest[key] = resolvedEnvVar;
-  await saveManifest(manifest, cwd);
+  await saveManifest(manifest, manifestCwd);
 
-  console.log(`${isUpdate ? "Updated" : "Added"}: ${key} -> ${resolvedEnvVar}`);
+  const label = isGlobal ? " (global)" : "";
+  console.log(`${isUpdate ? "Updated" : "Added"}${label}: ${key} -> ${resolvedEnvVar}`);
 
   const value = await prompt(`  Value for ${resolvedEnvVar}: `);
   if (!value) {
@@ -165,25 +181,29 @@ async function cmdSet(key: string, envVar: string | undefined, cwd: string) {
     return;
   }
 
-  const { ok, error } = await passInsert(key, value, cwd);
+  const { ok, error } = await passInsert(key, value, vaultDir);
   console.log(ok ? `  -> stored` : `  -> Error: ${error}`);
 }
 
-async function cmdRemove(key: string, cwd: string) {
-  const manifest = await loadManifest(cwd);
+async function cmdRemove(key: string, cwd: string, isGlobal: boolean) {
+  const manifestCwd = isGlobal ? getGlobalVaultDir() : cwd;
+  const vaultDir = resolveVaultDir(cwd, isGlobal);
+  const manifest = await loadManifest(manifestCwd);
+
   if (!(key in manifest)) {
-    console.error(`Key "${key}" not found in manifest.json.`);
+    const label = isGlobal ? "global " : "";
+    console.error(`Key "${key}" not found in ${label}manifest.json.`);
     process.exit(1);
   }
 
   const envVar = manifest[key];
   delete manifest[key];
-  await saveManifest(manifest, cwd);
+  await saveManifest(manifest, manifestCwd);
   console.log(`Manifest: ${key} -> ${envVar} removed`);
 
   if (await isPassAvailable()) {
     const proc = Bun.spawn(["pass", "rm", "--force", key], {
-      env: vaultEnv(cwd),
+      env: vaultEnv(vaultDir),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -197,25 +217,26 @@ async function cmdRemove(key: string, cwd: string) {
   }
 }
 
-async function cmdStatus(cwd: string) {
+async function cmdStatus(cwd: string, isGlobal: boolean) {
   if (!(await isConfigured())) {
     console.log("Vault not configured. Run: fio-vault init");
     return;
   }
 
   console.log("Vault Status:\n");
-  const keys = await listKeys({ cwd });
-  for (const { key, envVar, exists } of keys) {
+  const keys = await listKeys({ cwd, global: !isGlobal });
+  for (const { key, envVar, exists, source } of keys) {
     const status = exists ? "+" : "-";
-    console.log(`  ${status}  ${key}  ->  ${envVar}`);
+    const tag = source === "global" ? " [global]" : "";
+    console.log(`  ${status}  ${key}  ->  ${envVar}${tag}`);
   }
 
   const found = keys.filter((k) => k.exists).length;
   console.log(`\n${found}/${keys.length} secrets available.`);
 }
 
-async function cmdOnboard(cwd: string) {
-  const vaultDir = getVaultDir(cwd);
+async function cmdOnboard(cwd: string, isGlobal: boolean) {
+  const vaultDir = resolveVaultDir(cwd, isGlobal);
   const keyFile = join(vaultDir, "vault.key");
 
   if (!existsSync(keyFile)) {
@@ -248,7 +269,7 @@ async function cmdOnboard(cwd: string) {
   }
 
   process.env.FIO_VAULT_PASSPHRASE = passphrase;
-  const keys = await listKeys({ cwd });
+  const keys = await listKeys({ cwd, global: false });
   const readable = keys.filter((k) => k.exists);
 
   if (readable.length === 0) {
@@ -275,6 +296,7 @@ Commands:
   onboard              Setup on a new machine (import GPG key)
 
 Options:
+  --global             Use global vault (~/.fio-vault/) instead of project vault
   --cwd <path>         Project root directory (default: cwd)
   --help               Show this help`;
 
@@ -282,6 +304,7 @@ const { values, positionals } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
     cwd: { type: "string", default: process.cwd() },
+    global: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
   allowPositionals: true,
@@ -294,11 +317,12 @@ if (values.help || positionals.length === 0) {
 }
 
 const cwd = values.cwd as string;
+const isGlobal = values.global as boolean;
 const command = positionals[0];
 
 switch (command) {
   case "init":
-    await cmdInit(cwd);
+    await cmdInit(cwd, isGlobal);
     break;
   case "set":
     if (!positionals[1]) {
@@ -306,7 +330,7 @@ switch (command) {
       process.exit(1);
     }
     validateKey(positionals[1]);
-    await cmdSet(positionals[1], positionals[2], cwd);
+    await cmdSet(positionals[1], positionals[2], cwd, isGlobal);
     break;
   case "remove":
     if (!positionals[1]) {
@@ -314,13 +338,13 @@ switch (command) {
       process.exit(1);
     }
     validateKey(positionals[1]);
-    await cmdRemove(positionals[1], cwd);
+    await cmdRemove(positionals[1], cwd, isGlobal);
     break;
   case "status":
-    await cmdStatus(cwd);
+    await cmdStatus(cwd, isGlobal);
     break;
   case "onboard":
-    await cmdOnboard(cwd);
+    await cmdOnboard(cwd, isGlobal);
     break;
   default:
     console.error(`Unknown command: ${command}`);

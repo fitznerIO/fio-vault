@@ -1,27 +1,57 @@
 # fio-vault
 
-GPG-based secret management for Bun projects. Encrypt secrets in your repo with GPG/pass, load them into `process.env` at runtime.
+GPG-based secret management for Bun projects. Encrypt secrets in your repo with GPG/pass, load them into `process.env` at runtime. Supports both project-local and global vaults.
 
 ## Install
 
 ```bash
+# As project dependency (library API)
 bun add github:fitznerIO/fio-vault
+
+# Global CLI (for managing global + project vaults from anywhere)
+bun add -g github:fitznerIO/fio-vault
 ```
 
 ## Quick Start
 
 ```bash
-# Initialize vault (one-time)
-bunx fio-vault init
+# Initialize project vault (one-time)
+fio-vault init
 
-# Add a secret
-bunx fio-vault set api-key API_KEY
+# Add a project secret
+fio-vault set api-key API_KEY
 
-# Check status
-bunx fio-vault status
+# Add a global secret (shared across all projects)
+fio-vault set --global npm-token NPM_TOKEN
+
+# Check status (shows project + global)
+fio-vault status
 
 # New machine setup
-bunx fio-vault onboard
+fio-vault onboard
+```
+
+## Global Vault
+
+fio-vault supports a global vault at `~/.fio-vault/` for secrets shared across all projects (e.g. NPM tokens, API keys for dev tools).
+
+```bash
+# Initialize global vault
+fio-vault init --global
+
+# Add a global secret
+fio-vault set --global npm-token NPM_TOKEN
+
+# View all secrets (project + global)
+fio-vault status
+```
+
+When `loadSecrets()` runs, it loads the **project vault first**, then fills in missing env vars from the **global vault**. Project secrets always take priority.
+
+To disable the global vault fallback:
+
+```typescript
+await loadSecrets({ global: false });
 ```
 
 ## Library API
@@ -29,17 +59,21 @@ bunx fio-vault onboard
 ```typescript
 import { loadSecrets, listKeys, getSecret, isConfigured } from "fio-vault";
 
-// Load all secrets into process.env (no-overwrite)
+// Load all secrets into process.env (project + global, no-overwrite)
 await loadSecrets();
+
+// Project vault only (skip global)
+await loadSecrets({ global: false });
 
 // With options
 await loadSecrets({ cwd: "/path/to/project", passphrase: "override" });
 
-// List secrets with status
+// List secrets with status and source
 const keys = await listKeys();
-// [{ key: "api-key", envVar: "API_KEY", exists: true }, ...]
+// [{ key: "api-key", envVar: "API_KEY", exists: true, source: "project" },
+//  { key: "npm-token", envVar: "NPM_TOKEN", exists: true, source: "global" }]
 
-// Get single secret
+// Get single secret (checks project first, then global)
 const value = await getSecret("api-key");
 
 // Check if vault is usable
@@ -53,7 +87,12 @@ fio-vault init                 Initialize vault (GPG key + pass store)
 fio-vault set <key> [ENV_VAR]  Add/update a secret
 fio-vault remove <key>         Remove a secret
 fio-vault status               Show vault status
-fio-vault onboard              Setup on new machine
+fio-vault onboard              Setup on a new machine (import GPG key)
+
+Options:
+  --global             Use global vault (~/.fio-vault/) instead of project vault
+  --cwd <path>         Project root directory (default: cwd)
+  --help               Show this help
 ```
 
 ## Environment Variables
@@ -65,9 +104,12 @@ fio-vault onboard              Setup on new machine
 
 ## How it works
 
-Secrets are stored as GPG-encrypted files in `vault/` alongside a `manifest.json` that maps keys to environment variable names:
+Secrets are stored as GPG-encrypted files alongside a `manifest.json` that maps keys to environment variable names:
 
 ```
+<project>/vault/               Project vault (per-repo)
+~/.fio-vault/vault/            Global vault (shared across projects)
+
 vault/
   .gpg-id          GPG key ID (git-ignored)
   manifest.json    { "api-key": "API_KEY", ... } (committed)

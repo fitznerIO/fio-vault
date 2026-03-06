@@ -20,13 +20,16 @@ The codebase is a single-layer library + CLI with no external runtime dependenci
 - **`src/vault.ts`** — core logic: loads manifest, decrypts secrets, populates `process.env` (no-overwrite semantics)
 - **`src/gpg.ts`** — GPG operations: decryption via `pass show` (interactive) or direct `gpg --decrypt` with passphrase via stdin (CI/automation)
 - **`src/manifest.ts`** — reads/writes `vault/manifest.json` which maps secret keys to env var names
-- **`src/utils.ts`** — pure helpers: path resolution (`getVaultDir`, `getManifestPath`, `getGpgFilePath`), key-to-env-var conversion
+- **`src/utils.ts`** — pure helpers: path resolution (`getVaultDir`, `getGlobalVaultDir`, `getManifestPath`, `getGpgFilePath`), key validation, key-to-env-var conversion
 - **`src/types.ts`** — shared interfaces (`VaultOptions`, `KeyStatus`)
-- **`src/cli.ts`** — CLI entry point using `util.parseArgs`, commands: `init`, `set`, `remove`, `status`, `onboard`
+- **`src/cli.ts`** — CLI entry point using `util.parseArgs`, commands: `init`, `set`, `remove`, `status`, `onboard`; supports `--global` flag
 
 ## Key Patterns
 
 - All shell commands use `Bun.spawn` (not `child_process`)
 - Decryption has two paths: passphrase-based (direct GPG, for CI) vs agent-based (`pass show`, interactive)
+- **Dual vault**: project vault (`<cwd>/vault/`) + global vault (`~/.fio-vault/vault/`). Project vault has priority; global vault fills missing env vars as fallback. Disable with `global: false`.
 - The vault directory defaults to `<cwd>/vault/` and is overridable via `PASSWORD_STORE_DIR`
-- Tests use `bun:test` with `spyOn` to mock `gpg` module functions; each test creates a temp directory with a manifest
+- Key names are validated against path traversal (`validateKey()`)
+- Manifest JSON is validated against prototype pollution
+- Tests use `bun:test` with `spyOn` to mock `gpg` module functions; each test creates a temp directory with a manifest and uses `global: false` to isolate from system state
