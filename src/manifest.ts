@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import { getManifestPath } from "./utils";
 
 /** Read manifest.json -> Record<key, envVar>. Returns {} if missing. */
@@ -24,8 +24,10 @@ export async function loadManifest(cwd?: string): Promise<Record<string, string>
   }
 }
 
-/** Write manifest.json atomically. */
+/** Write manifest.json atomically (write to temp file, then rename). */
 export async function saveManifest(manifest: Record<string, string>, cwd?: string): Promise<void> {
   const path = getManifestPath(cwd);
-  await Bun.write(path, JSON.stringify(manifest, null, 2) + "\n");
+  const tmp = path + ".tmp";
+  await Bun.write(tmp, JSON.stringify(manifest, null, 2) + "\n");
+  await rename(tmp, path);
 }

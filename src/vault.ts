@@ -14,6 +14,19 @@ function hasGlobalVault(): boolean {
   return existsSync(getManifestPath(getGlobalVaultDir()));
 }
 
+/** Resolve the ordered list of vault dirs to iterate (project-first, global-fallback). */
+function resolveVaultDirs(
+  opts: VaultOptions | undefined,
+): Array<{ dir: string | undefined; source: "project" | "global" }> {
+  const dirs: Array<{ dir: string | undefined; source: "project" | "global" }> = [
+    { dir: opts?.cwd, source: "project" },
+  ];
+  if (opts?.global !== false && hasGlobalVault()) {
+    dirs.push({ dir: getGlobalVaultDir(), source: "global" });
+  }
+  return dirs;
+}
+
 /**
  * Load all secrets from vault into process.env.
  * Loads project vault first, then global vault as fallback (no-overwrite).
@@ -21,30 +34,14 @@ function hasGlobalVault(): boolean {
  */
 export async function loadSecrets(opts?: VaultOptions): Promise<void> {
   const passphrase = opts?.passphrase;
-  const includeGlobal = opts?.global !== false;
-
   if (!(await gpgIsConfigured({ passphrase }))) return;
 
-  // Phase 1: Project vault (higher priority)
-  const projectManifest = await loadManifest(opts?.cwd);
-  for (const [key, envVar] of Object.entries(projectManifest)) {
-    if (process.env[envVar] !== undefined) continue;
-    const value = await decrypt(key, { cwd: opts?.cwd, passphrase });
-    if (value) {
-      process.env[envVar] = value;
-    }
-  }
-
-  // Phase 2: Global vault (fallback for missing env vars)
-  if (includeGlobal && hasGlobalVault()) {
-    const globalDir = getGlobalVaultDir();
-    const globalManifest = await loadManifest(globalDir);
-    for (const [key, envVar] of Object.entries(globalManifest)) {
+  for (const { dir } of await resolveVaultDirs(opts)) {
+    const manifest = await loadManifest(dir);
+    for (const [key, envVar] of Object.entries(manifest)) {
       if (process.env[envVar] !== undefined) continue;
-      const value = await decrypt(key, { cwd: globalDir, passphrase });
-      if (value) {
-        process.env[envVar] = value;
-      }
+      const value = await decrypt(key, { cwd: dir, passphrase });
+      if (value) process.env[envVar] = value;
     }
   }
 }
@@ -52,26 +49,15 @@ export async function loadSecrets(opts?: VaultOptions): Promise<void> {
 /** List all registered secrets with their status from both vaults. */
 export async function listKeys(opts?: VaultOptions): Promise<KeyStatus[]> {
   const passphrase = opts?.passphrase;
-  const includeGlobal = opts?.global !== false;
   const results: KeyStatus[] = [];
   const seen = new Set<string>();
 
-  // Project vault first
-  const projectManifest = await loadManifest(opts?.cwd);
-  for (const [key, envVar] of Object.entries(projectManifest)) {
-    const value = await decrypt(key, { cwd: opts?.cwd, passphrase });
-    results.push({ key, envVar, exists: value !== null, source: "project" });
-    seen.add(envVar);
-  }
-
-  // Global vault (skip env vars already covered by project)
-  if (includeGlobal && hasGlobalVault()) {
-    const globalDir = getGlobalVaultDir();
-    const globalManifest = await loadManifest(globalDir);
-    for (const [key, envVar] of Object.entries(globalManifest)) {
+  for (const { dir, source } of await resolveVaultDirs(opts)) {
+    const manifest = await loadManifest(dir);
+    for (const [key, envVar] of Object.entries(manifest)) {
       if (seen.has(envVar)) continue;
-      const value = await decrypt(key, { cwd: globalDir, passphrase });
-      results.push({ key, envVar, exists: value !== null, source: "global" });
+      const value = await decrypt(key, { cwd: dir, passphrase });
+      results.push({ key, envVar, exists: value !== null, source });
       seen.add(envVar);
     }
   }
@@ -82,15 +68,10 @@ export async function listKeys(opts?: VaultOptions): Promise<KeyStatus[]> {
 /** Get a single decrypted secret by key. Checks project vault first, then global. */
 export async function getSecret(key: string, opts?: VaultOptions): Promise<string | null> {
   const passphrase = opts?.passphrase;
-  const includeGlobal = opts?.global !== false;
 
-  // Try project vault first
-  const value = await decrypt(key, { cwd: opts?.cwd, passphrase });
-  if (value !== null) return value;
-
-  // Fallback to global vault
-  if (includeGlobal && hasGlobalVault()) {
-    return decrypt(key, { cwd: getGlobalVaultDir(), passphrase });
+  for (const { dir } of resolveVaultDirs(opts)) {
+    const value = await decrypt(key, { cwd: dir, passphrase });
+    if (value !== null) return value;
   }
 
   return null;

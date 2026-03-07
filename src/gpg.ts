@@ -55,7 +55,8 @@ export async function decrypt(
       if (!existsSync(gpgFile)) return null;
       proc = Bun.spawn(
         ["gpg", "--batch", "--quiet", "--yes", "--passphrase-fd", "0", "--decrypt", gpgFile],
-        { stdin: new TextEncoder().encode(passphrase), stdout: "pipe", stderr: "pipe" },
+        // GPG expects a newline-terminated passphrase on fd 0
+        { stdin: new TextEncoder().encode(passphrase + "\n"), stdout: "pipe", stderr: "pipe" },
       );
     } else {
       // Standard pass show — uses gpg-agent

@@ -11,11 +11,20 @@ import { listKeys } from "./vault";
 
 // --- Helpers ---
 
+// Single shared readline interface — avoids terminal mode issues (e.g. @ not typeable)
+// when opening/closing multiple interfaces on the same stdin.
+let _rl: ReturnType<typeof createInterface> | null = null;
+function getReadline() {
+  if (!_rl) {
+    _rl = createInterface({ input: process.stdin, output: process.stdout });
+    _rl.on("close", () => { _rl = null; });
+  }
+  return _rl;
+}
+
 function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
+    getReadline().question(question, (answer) => {
       resolve(answer.trim());
     });
   });
@@ -26,11 +35,12 @@ function vaultEnv(vaultDir: string, extra: Record<string, string> = {}): Record<
 }
 
 async function passInsert(key: string, value: string, vaultDir: string): Promise<{ ok: boolean; error?: string }> {
+  // Pass value via stdin — no shell involved, no injection surface
   const proc = Bun.spawn(
-    ["sh", "-c", `printf '%s\\n' "$_FIO_SECRET" | pass insert --force --multiline "${key}"`],
+    ["pass", "insert", "--force", "--multiline", key],
     {
-      env: vaultEnv(vaultDir, { _FIO_SECRET: value }),
-      stdin: "ignore",
+      env: vaultEnv(vaultDir),
+      stdin: new TextEncoder().encode(value + "\n"),
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -66,9 +76,10 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
     console.log(`${label} exists (Key: ${email}). Secrets will be overwritten.\n`);
   } else {
     console.log("1/3  Generate GPG key...\n");
-    const name = (await prompt("  Name (Enter = Vault): ")) || "Vault";
-    email = (await prompt("  Email (Enter = vault@project): ")) || "vault@project";
-    const passphrase = await prompt("  Passphrase (remember! -> password manager): ");
+    // Strip newlines/carriage-returns to prevent GPG batch parameter injection
+    const name = ((await prompt("  Name (Enter = Vault): ")) || "Vault").replace(/[\r\n]/g, "");
+    email = ((await prompt("  Email (Enter = vault@project): ")) || "vault@project").replace(/[\r\n]/g, "");
+    const passphrase = (await prompt("  Passphrase (remember! -> password manager): ")).replace(/[\r\n]/g, "");
 
     if (!passphrase) {
       console.error("\n  Passphrase is required.");
@@ -114,7 +125,8 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
     const exportProc = Bun.spawn(
       ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback",
        "--passphrase-fd", "0", "--export-secret-keys", "--armor", email],
-      { stdin: new TextEncoder().encode(passphrase), stdout: "pipe", stderr: "pipe" },
+      // GPG expects a newline-terminated passphrase on fd 0
+      { stdin: new TextEncoder().encode(passphrase + "\n"), stdout: "pipe", stderr: "pipe" },
     );
 
     if ((await exportProc.exited) === 0) {
@@ -274,6 +286,8 @@ async function cmdOnboard(cwd: string, isGlobal: boolean) {
 
   process.env.FIO_VAULT_PASSPHRASE = passphrase;
   const keys = await listKeys({ cwd, global: false });
+  // Remove from env immediately after verification — shell config is the intended persistent store
+  delete process.env.FIO_VAULT_PASSPHRASE;
   const readable = keys.filter((k) => k.exists);
 
   if (readable.length === 0) {
