@@ -111,14 +111,21 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
 
     console.log("\n3/3  Export GPG private key...");
     const keyFile = join(vaultDir, "vault.key");
-    const exportResult = Bun.spawnSync(
-      ["gpg", "--batch", "--yes", "--export-secret-keys", "--armor", email],
-      { stdout: "pipe", stderr: "pipe" },
+    const exportProc = Bun.spawn(
+      ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback",
+       "--passphrase-fd", "0", "--export-secret-keys", "--armor", email],
+      { stdin: new TextEncoder().encode(passphrase), stdout: "pipe", stderr: "pipe" },
     );
 
-    if (exportResult.exitCode === 0 && exportResult.stdout.length > 0) {
-      Bun.write(keyFile, exportResult.stdout);
-      console.log(`  Key exported: ${keyFile}`);
+    if ((await exportProc.exited) === 0) {
+      const keyData = await new Response(exportProc.stdout).arrayBuffer();
+      if (keyData.byteLength > 0) {
+        await Bun.write(keyFile, keyData);
+        console.log(`  Key exported: ${keyFile}`);
+      } else {
+        console.warn("  Warning: Key export produced empty output. Run manually:");
+        console.warn(`  gpg --export-secret-keys --armor ${email} > "${keyFile}"`);
+      }
     } else {
       console.warn("  Warning: Key export failed. Run manually:");
       console.warn(`  gpg --export-secret-keys --armor ${email} > "${keyFile}"`);
