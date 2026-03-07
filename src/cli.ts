@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from "util";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "readline";
@@ -111,21 +111,9 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
 
     console.log("\n3/3  Export GPG private key...");
     const keyFile = join(vaultDir, "vault.key");
-    const exportProc = Bun.spawn(
-      ["gpg", "--export-secret-keys", "--armor", email],
-      { stdin: "inherit", stdout: "pipe", stderr: "inherit" },
-    );
-
-    if ((await exportProc.exited) === 0) {
-      const keyData = await new Response(exportProc.stdout).arrayBuffer();
-      if (keyData.byteLength > 0) {
-        writeFileSync(keyFile, Buffer.from(keyData));
-        console.log(`  Key exported: ${keyFile}`);
-      }
-    } else {
-      console.warn("  Warning: Key export failed. Manual:");
-      console.warn(`  gpg --export-secret-keys --armor ${email} > ${keyFile}`);
-    }
+    console.log("  Run this command in your terminal to export the key:");
+    console.log(`\n  gpg --export-secret-keys --armor ${email} > "${keyFile}"\n`);
+    await prompt("  Press Enter once done (or skip to do it later)...");
   }
 
   // Store secrets from manifest
