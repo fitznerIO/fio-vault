@@ -30,6 +30,11 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+/** Close the readline interface so the process can exit cleanly. */
+function closePrompt() {
+  if (_rl) { _rl.close(); _rl = null; }
+}
+
 function vaultEnv(vaultDir: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
   return { ...process.env, PASSWORD_STORE_DIR: vaultDir, ...extra };
 }
@@ -369,3 +374,5 @@ switch (command) {
     console.log(USAGE);
     process.exit(1);
 }
+
+closePrompt();
