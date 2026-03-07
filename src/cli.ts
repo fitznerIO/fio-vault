@@ -5,8 +5,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "readline";
 import { loadManifest, saveManifest } from "./manifest";
-import { isPassAvailable, isConfigured, decrypt } from "./gpg";
-import { keyToEnvVar, getVaultDir, getGlobalVaultDir, getManifestPath, validateKey } from "./utils";
+import { isPassAvailable, isConfigured } from "./gpg";
+import { keyToEnvVar, getVaultDir, getGlobalVaultDir, validateKey } from "./utils";
 import { listKeys } from "./vault";
 
 // --- Helpers ---
@@ -112,8 +112,8 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
     console.log("\n3/3  Export GPG private key...");
     const keyFile = join(vaultDir, "vault.key");
     const exportProc = Bun.spawn(
-      ["gpg", "--batch", "--yes", "--export-secret-keys", "--armor", email],
-      { stdout: "pipe", stderr: "pipe" },
+      ["gpg", "--export-secret-keys", "--armor", email],
+      { stdin: "inherit", stdout: "pipe", stderr: "inherit" },
     );
 
     if ((await exportProc.exited) === 0) {
