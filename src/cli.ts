@@ -111,9 +111,16 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
 
     console.log("\n3/3  Export GPG private key...");
     const keyFile = join(vaultDir, "vault.key");
-    console.log("  Run this command in your terminal to export the key:");
-    console.log(`\n  gpg --export-secret-keys --armor ${email} > "${keyFile}"\n`);
-    await prompt("  Press Enter once done (or skip to do it later)...");
+    console.log("  Open a new terminal and run:\n");
+    console.log(`  gpg --export-secret-keys --armor ${email} > "${keyFile}"\n`);
+    while (!existsSync(keyFile)) {
+      await prompt("  Press Enter to check if export is done...");
+      if (existsSync(keyFile)) {
+        console.log("  vault.key found.");
+      } else {
+        console.log("  vault.key not found yet — run the command above first.");
+      }
+    }
   }
 
   // Store secrets from manifest
