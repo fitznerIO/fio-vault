@@ -3,7 +3,6 @@ import { parseArgs } from "util";
 import { existsSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "readline";
 import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured } from "./gpg";
 import { keyToEnvVar, getVaultDir, getGlobalVaultDir, validateKey } from "./utils";
@@ -11,23 +10,23 @@ import { listKeys } from "./vault";
 
 // --- Helpers ---
 
-// Single shared readline interface — avoids terminal mode issues (e.g. @ not typeable)
-// when opening/closing multiple interfaces on the same stdin.
-let _rl: ReturnType<typeof createInterface> | null = null;
-function getReadline() {
-  if (!_rl) {
-    _rl = createInterface({ input: process.stdin, output: process.stdout });
-    _rl.on("close", () => { _rl = null; });
+// Read stdin line-by-line directly — readline.question has a Bun bug where
+// sequential calls with a shared instance hang after the first prompt.
+const stdinLines = (async function* () {
+  let buf = "";
+  for await (const chunk of process.stdin) {
+    buf += chunk.toString();
+    const lines = buf.split("\n");
+    buf = lines.pop()!;
+    for (const line of lines) yield line;
   }
-  return _rl;
-}
+  if (buf) yield buf;
+})();
 
-function prompt(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    getReadline().question(question, (answer) => {
-      resolve(answer.trim());
-    });
-  });
+async function prompt(question: string): Promise<string> {
+  process.stdout.write(question);
+  const { value, done } = await stdinLines.next();
+  return done ? "" : value.trim();
 }
 
 function vaultEnv(vaultDir: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
