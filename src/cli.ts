@@ -248,7 +248,8 @@ async function cmdStatus(cwd: string, isGlobal: boolean) {
   }
 
   console.log("Vault Status:\n");
-  const keys = await listKeys({ cwd, global: !isGlobal });
+  const effectiveCwd = isGlobal ? getGlobalVaultDir() : cwd;
+  const keys = await listKeys({ cwd: effectiveCwd, global: !isGlobal });
   for (const { key, envVar, exists, source } of keys) {
     const status = exists ? "+" : "-";
     const tag = source === "global" ? " [global]" : "";
