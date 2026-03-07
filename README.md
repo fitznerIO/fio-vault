@@ -168,3 +168,18 @@ sudo pacman -S pass
 ```
 
 `pass` is only required for CLI commands (`init`, `set`, `remove`). The library API can decrypt secrets directly with GPG using `FIO_VAULT_PASSPHRASE`.
+
+### pinentry-mac (macOS only)
+
+```bash
+brew install pinentry-mac
+```
+
+Required on macOS for GPG passphrase prompts when running outside a terminal (IDEs, GUI apps, spawned processes). Without it, GPG fails with `Inappropriate ioctl for device` because the default `pinentry-curses` requires a TTY.
+
+`fio-vault init` automatically configures `pinentry-mac` in `~/.gnupg/gpg-agent.conf` if it detects the binary. To configure manually:
+
+```bash
+echo "pinentry-program $(which pinentry-mac)" >> ~/.gnupg/gpg-agent.conf
+gpgconf --kill gpg-agent
+```

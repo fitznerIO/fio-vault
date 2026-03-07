@@ -16,9 +16,16 @@ async function check(cmd: string, name: string, install: string): Promise<void> 
 await check("gpg", "GnuPG", "brew install gnupg (macOS) / apt install gnupg (Linux)");
 await check("pass", "pass", "brew install pass (macOS) / apt install pass (Linux)");
 
+if (process.platform === "darwin") {
+  await check("pinentry-mac", "pinentry-mac", "brew install pinentry-mac");
+}
+
 if (warnings.length > 0) {
   console.warn("\n[fio-vault] Missing system dependencies:\n");
   for (const w of warnings) console.warn(w);
   console.warn("\n  fio-vault requires gpg and pass to encrypt/decrypt secrets.");
+  if (process.platform === "darwin") {
+    console.warn("  On macOS, pinentry-mac is required for passphrase prompts in IDEs and GUI apps.");
+  }
   console.warn("  See: https://github.com/fitznerIO/fio-vault#requirements\n");
 }

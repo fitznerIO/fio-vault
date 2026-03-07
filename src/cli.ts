@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 import { parseArgs } from "util";
-import { existsSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync, appendFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { homedir, platform } from "node:os";
 import { createInterface } from "readline";
 import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured } from "./gpg";
@@ -54,6 +55,47 @@ async function passInsert(key: string, value: string, vaultDir: string): Promise
   if (code === 0) return { ok: true };
   const stderr = await new Response(proc.stderr).text();
   return { ok: false, error: stderr.trim() || "unknown error" };
+}
+
+/** Check and configure pinentry-mac on macOS for GUI passphrase prompts. */
+async function ensurePinentryMac(): Promise<void> {
+  if (platform() !== "darwin") return;
+
+  // Find pinentry-mac binary
+  const candidates = ["/opt/homebrew/bin/pinentry-mac", "/usr/local/bin/pinentry-mac"];
+  const pinentryPath = candidates.find((p) => existsSync(p));
+
+  if (!pinentryPath) {
+    console.warn("\n  Warning: pinentry-mac not found.");
+    console.warn("  Without it, GPG cannot prompt for passphrases outside a terminal (IDEs, CI, GUI apps).");
+    console.warn("  Install with: brew install pinentry-mac");
+    return;
+  }
+
+  // Check gpg-agent.conf
+  const gnupgDir = join(homedir(), ".gnupg");
+  const agentConf = join(gnupgDir, "gpg-agent.conf");
+  const expectedLine = `pinentry-program ${pinentryPath}`;
+
+  if (existsSync(agentConf)) {
+    const content = await readFile(agentConf, "utf-8");
+    if (content.includes("pinentry-program")) {
+      if (content.includes(pinentryPath)) return; // already configured
+      console.warn(`\n  Warning: ${agentConf} has a different pinentry-program configured.`);
+      console.warn(`  For fio-vault to work in IDEs/GUIs, set: ${expectedLine}`);
+      return;
+    }
+  }
+
+  // Auto-configure
+  mkdirSync(gnupgDir, { recursive: true });
+  appendFileSync(agentConf, `\n${expectedLine}\n`);
+  console.log(`\n  Configured pinentry-mac in ${agentConf}`);
+
+  // Restart gpg-agent to pick up the change
+  const kill = Bun.spawn(["gpgconf", "--kill", "gpg-agent"], { stdout: "pipe", stderr: "pipe" });
+  await kill.exited;
+  console.log("  Restarted gpg-agent");
 }
 
 /** Resolve the effective vault directory based on --global flag. */
@@ -150,6 +192,8 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
       console.warn("  Warning: Key export failed. Run manually:");
       console.warn(`  gpg --export-secret-keys --armor ${email} > "${keyFile}"`);
     }
+
+    await ensurePinentryMac();
   }
 
   // Store secrets from manifest
