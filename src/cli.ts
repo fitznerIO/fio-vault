@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from "util";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "readline";
@@ -81,10 +81,12 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
     console.log(`${label} exists (Key: ${email}). Secrets will be overwritten.\n`);
   } else {
     console.log("1/3  Generate GPG key...\n");
-    // Strip newlines/carriage-returns to prevent GPG batch parameter injection
-    const name = ((await prompt("  Name (Enter = Vault): ")) || "Vault").replace(/[\r\n]/g, "");
-    email = ((await prompt("  Email (Enter = vault@project): ")) || "vault@project").replace(/[\r\n]/g, "");
-    const passphrase = (await prompt("  Passphrase (remember! -> password manager): ")).replace(/[\r\n]/g, "");
+    // Sanitize GPG batch input: strip newlines (parameter injection) and leading %
+    // (GPG batch directives like %commit, %no-protection, %ask-passphrase).
+    const sanitizeGpgInput = (s: string) => s.replace(/[\r\n]/g, "").replace(/^%/, "");
+    const name = sanitizeGpgInput((await prompt("  Name (Enter = Vault): ")) || "Vault");
+    email = sanitizeGpgInput((await prompt("  Email (Enter = vault@project): ")) || "vault@project");
+    const passphrase = sanitizeGpgInput(await prompt("  Passphrase (remember! -> password manager): "));
 
     if (!passphrase) {
       console.error("\n  Passphrase is required.");
@@ -138,6 +140,7 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
       const keyData = await new Response(exportProc.stdout).arrayBuffer();
       if (keyData.byteLength > 0) {
         await Bun.write(keyFile, keyData);
+        chmodSync(keyFile, 0o600);
         console.log(`  Key exported: ${keyFile}`);
       } else {
         console.warn("  Warning: Key export produced empty output. Run manually:");

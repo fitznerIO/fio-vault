@@ -54,7 +54,8 @@ export async function decrypt(
       const gpgFile = getGpgFilePath(key, cwd);
       if (!existsSync(gpgFile)) return null;
       proc = Bun.spawn(
-        ["gpg", "--batch", "--quiet", "--yes", "--passphrase-fd", "0", "--decrypt", gpgFile],
+        ["gpg", "--batch", "--quiet", "--yes", "--pinentry-mode", "loopback",
+         "--passphrase-fd", "0", "--decrypt", gpgFile],
         // GPG expects a newline-terminated passphrase on fd 0
         { stdin: new TextEncoder().encode(passphrase + "\n"), stdout: "pipe", stderr: "pipe" },
       );
