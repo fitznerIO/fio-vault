@@ -10,18 +10,10 @@ import { listKeys } from "./vault";
 
 // --- Helpers ---
 
-// Read stdin line-by-line directly — readline.question has a Bun bug where
-// sequential calls with a shared instance hang after the first prompt.
-const stdinLines = (async function* () {
-  let buf = "";
-  for await (const chunk of process.stdin) {
-    buf += chunk.toString();
-    const lines = buf.split("\n");
-    buf = lines.pop()!;
-    for (const line of lines) yield line;
-  }
-  if (buf) yield buf;
-})();
+// Bun-native line reader: `console` as async iterable reads stdin line-by-line
+// without setting raw mode. Using for-await on process.stdin directly sets raw mode
+// in Bun, which breaks Alt+key input (e.g. @ = Alt+L on German keyboards → ^[l).
+const stdinLines = (console as unknown as AsyncIterable<string>)[Symbol.asyncIterator]();
 
 async function prompt(question: string): Promise<string> {
   process.stdout.write(question);
