@@ -2,6 +2,8 @@
   "name": "fio-vault",
   "version": "0.1.0",
   "description": "GPG-based secret management for Bun projects",
+  "license": "MIT",
+  "author": "fitznerIO GmbH <info@fitzner.io> (https://fitzner.io)",
   "type": "module",
   "bin": {
     "fio-vault": "./src/cli.ts"
