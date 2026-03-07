@@ -58,7 +58,7 @@ async function passInsert(key: string, value: string, vaultDir: string): Promise
 
 /** Resolve the effective vault directory based on --global flag. */
 function resolveVaultDir(cwd: string, isGlobal: boolean): string {
-  return isGlobal ? getGlobalVaultDir() : getVaultDir(cwd);
+  return isGlobal ? getVaultDir(getGlobalVaultDir()) : getVaultDir(cwd);
 }
 
 // --- Commands ---
