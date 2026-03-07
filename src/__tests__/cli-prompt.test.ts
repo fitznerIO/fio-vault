@@ -1,28 +1,20 @@
 import { describe, test, expect } from "bun:test";
 import { Readable } from "node:stream";
+import { createInterface } from "node:readline";
 
 /**
  * Tests that the prompt() helper reads sequential lines correctly from stdin,
- * including special characters like @, which broke with the old readline approach.
+ * including special characters like @, which broke with raw-mode approaches.
  */
 
-// Re-implement the prompt logic inline (same as src/cli.ts) against a mock stdin.
+// Mirror the actual cli.ts implementation: readline with terminal:false + async iterator.
 function makePromptFn(mockLines: string[]) {
   const readable = Readable.from(mockLines.join("\n") + "\n");
-
-  const stdinLines = (async function* () {
-    let buf = "";
-    for await (const chunk of readable) {
-      buf += chunk.toString();
-      const lines = buf.split("\n");
-      buf = lines.pop()!;
-      for (const line of lines) yield line;
-    }
-    if (buf) yield buf;
-  })();
+  const rl = createInterface({ input: readable, terminal: false });
+  const lines = rl[Symbol.asyncIterator]();
 
   async function prompt(question: string): Promise<string> {
-    const { value, done } = await stdinLines.next();
+    const { value, done } = await lines.next();
     return done ? "" : value.trim();
   }
 

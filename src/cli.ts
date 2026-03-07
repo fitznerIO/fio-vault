@@ -10,10 +10,12 @@ import { listKeys } from "./vault";
 
 // --- Helpers ---
 
-// Bun-native line reader: `console` as async iterable reads stdin line-by-line
-// without setting raw mode. Using for-await on process.stdin directly sets raw mode
-// in Bun, which breaks Alt+key input (e.g. @ = Alt+L on German keyboards → ^[l).
-const stdinLines = (console as unknown as AsyncIterable<string>)[Symbol.asyncIterator]();
+// readline with terminal:false keeps stdin in cooked mode — the OS terminal driver
+// handles key translations (e.g. Alt+L → @ on German keyboards) before we see them.
+// We use the async iterator instead of rl.question() which hangs on sequential calls in Bun.
+import { createInterface } from "node:readline";
+const rl = createInterface({ input: process.stdin, terminal: false });
+const stdinLines = rl[Symbol.asyncIterator]();
 
 async function prompt(question: string): Promise<string> {
   process.stdout.write(question);
