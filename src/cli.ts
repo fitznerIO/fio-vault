@@ -3,6 +3,7 @@ import { parseArgs } from "util";
 import { existsSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createInterface } from "readline";
 import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured } from "./gpg";
 import { keyToEnvVar, getVaultDir, getGlobalVaultDir, validateKey } from "./utils";
@@ -10,34 +11,23 @@ import { listKeys } from "./vault";
 
 // --- Helpers ---
 
-// Read lines from stdin via fd 0 using fs.readSync — this NEVER changes terminal mode.
-// Bun's readline and process.stdin async iteration both set raw mode, which breaks
-// Alt+key combos (e.g. Alt+L → @ on German macOS keyboards shows ^[l instead).
-// Synchronous fd reads leave the terminal in cooked mode where the OS handles all
-// key translations before the data reaches us.
-import { readSync } from "node:fs";
-
-let _stdinBuf = "";
-function readLine(): string {
-  while (!_stdinBuf.includes("\n")) {
-    const chunk = Buffer.alloc(4096);
-    const n = readSync(0, chunk);
-    if (n === 0) {
-      const rest = _stdinBuf;
-      _stdinBuf = "";
-      return rest;
-    }
-    _stdinBuf += chunk.toString("utf-8", 0, n);
+// Single shared readline interface — avoids terminal mode issues (e.g. @ not typeable)
+// when opening/closing multiple interfaces on the same stdin.
+let _rl: ReturnType<typeof createInterface> | null = null;
+function getReadline() {
+  if (!_rl) {
+    _rl = createInterface({ input: process.stdin, output: process.stdout });
+    _rl.on("close", () => { _rl = null; });
   }
-  const idx = _stdinBuf.indexOf("\n");
-  const line = _stdinBuf.slice(0, idx).replace(/\r$/, "");
-  _stdinBuf = _stdinBuf.slice(idx + 1);
-  return line;
+  return _rl;
 }
 
-function prompt(question: string): string {
-  process.stdout.write(question);
-  return readLine().trim();
+function prompt(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    getReadline().question(question, (answer) => {
+      resolve(answer.trim());
+    });
+  });
 }
 
 function vaultEnv(vaultDir: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
@@ -87,9 +77,9 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
   } else {
     console.log("1/3  Generate GPG key...\n");
     // Strip newlines/carriage-returns to prevent GPG batch parameter injection
-    const name = (prompt("  Name (Enter = Vault): ") || "Vault").replace(/[\r\n]/g, "");
-    email = (prompt("  Email (Enter = vault@project): ") || "vault@project").replace(/[\r\n]/g, "");
-    const passphrase = prompt("  Passphrase (remember! -> password manager): ").replace(/[\r\n]/g, "");
+    const name = ((await prompt("  Name (Enter = Vault): ")) || "Vault").replace(/[\r\n]/g, "");
+    email = ((await prompt("  Email (Enter = vault@project): ")) || "vault@project").replace(/[\r\n]/g, "");
+    const passphrase = (await prompt("  Passphrase (remember! -> password manager): ")).replace(/[\r\n]/g, "");
 
     if (!passphrase) {
       console.error("\n  Passphrase is required.");
@@ -160,7 +150,7 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
   if (Object.keys(manifest).length > 0) {
     console.log("\nStore secrets (empty input skips):\n");
     for (const [key, envVar] of Object.entries(manifest)) {
-      const value = prompt(`  ${envVar} (${key}): `);
+      const value = await prompt(`  ${envVar} (${key}): `);
       if (!value) {
         console.log(`    -> skipped`);
         continue;
@@ -201,7 +191,7 @@ async function cmdSet(key: string, envVar: string | undefined, cwd: string, isGl
   const label = isGlobal ? " (global)" : "";
   console.log(`${isUpdate ? "Updated" : "Added"}${label}: ${key} -> ${resolvedEnvVar}`);
 
-  const value = prompt(`  Value for ${resolvedEnvVar}: `);
+  const value = await prompt(`  Value for ${resolvedEnvVar}: `);
   if (!value) {
     console.log("  No value entered - only manifest updated.");
     return;
@@ -288,7 +278,7 @@ async function cmdOnboard(cwd: string, isGlobal: boolean) {
   console.log("  GPG key imported");
 
   console.log("\n2/2  Enter passphrase (from password manager):");
-  const passphrase = prompt("  FIO_VAULT_PASSPHRASE: ");
+  const passphrase = await prompt("  FIO_VAULT_PASSPHRASE: ");
   if (!passphrase) {
     console.error("  No passphrase entered.");
     process.exit(1);
