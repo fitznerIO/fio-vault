@@ -111,15 +111,17 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
 
     console.log("\n3/3  Export GPG private key...");
     const keyFile = join(vaultDir, "vault.key");
-    console.log("  Open a new terminal and run:\n");
-    console.log(`  gpg --export-secret-keys --armor ${email} > "${keyFile}"\n`);
-    while (!existsSync(keyFile)) {
-      await prompt("  Press Enter to check if export is done...");
-      if (existsSync(keyFile)) {
-        console.log("  vault.key found.");
-      } else {
-        console.log("  vault.key not found yet — run the command above first.");
-      }
+    const exportResult = Bun.spawnSync(
+      ["gpg", "--batch", "--yes", "--export-secret-keys", "--armor", email],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+
+    if (exportResult.exitCode === 0 && exportResult.stdout.length > 0) {
+      Bun.write(keyFile, exportResult.stdout);
+      console.log(`  Key exported: ${keyFile}`);
+    } else {
+      console.warn("  Warning: Key export failed. Run manually:");
+      console.warn(`  gpg --export-secret-keys --armor ${email} > "${keyFile}"`);
     }
   }
 
