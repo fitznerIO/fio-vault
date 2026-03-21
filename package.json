@@ -14,6 +14,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
+    "install-skill": "bun scripts/install-skill.ts",
     "postinstall": "bun scripts/postinstall.ts"
   },
   "devDependencies": {

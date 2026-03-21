@@ -11,6 +11,7 @@ fio-vault is a GPG-based secret management library and CLI for Bun projects. It 
 - `bun test` — run all tests
 - `bun test src/__tests__/vault.test.ts` — run a single test file
 - `bunx tsc --noEmit` — typecheck
+- `bun run install-skill` — install the Claude Code skill to `~/.claude/skills/fio-vault/`
 
 ## Architecture
 
@@ -23,6 +24,7 @@ The codebase is a single-layer library + CLI with no external runtime dependenci
 - **`src/utils.ts`** — pure helpers: path resolution (`getVaultDir`, `getGlobalVaultDir`, `getManifestPath`, `getGpgFilePath`), key validation, key-to-env-var conversion
 - **`src/types.ts`** — shared interfaces (`VaultOptions`, `KeyStatus`)
 - **`src/cli.ts`** — CLI entry point using `util.parseArgs`, commands: `init`, `set`, `remove`, `status`, `onboard`; supports `--global` flag
+- **`skill/`** — Claude Code skill (SKILL.md + references/workflows.md); installed via `bun run install-skill`
 
 ## Key Patterns
 

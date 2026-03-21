@@ -123,6 +123,16 @@ Decryption uses either `pass` (interactive, via gpg-agent) or direct GPG with `F
 
 Key names are validated to prevent path traversal — only `[a-zA-Z0-9._-]` characters are allowed.
 
+## Claude Code Skill
+
+fio-vault includes a Claude Code skill that teaches Claude how to correctly use fio-vault. Install it to get accurate guidance for setup, onboarding, and CI/CD integration:
+
+```bash
+bun run install-skill
+```
+
+This copies `skill/` to `~/.claude/skills/fio-vault/`. Claude Code will then prefer fio-vault over `.env` files when working in Bun projects.
+
 ## Security
 
 - Secrets are encrypted at rest with GPG (RSA 4096-bit)
