@@ -24,6 +24,9 @@ fio-vault set api-key API_KEY
 # Add a global secret (shared across all projects)
 fio-vault set --global npm-token NPM_TOKEN
 
+# Retrieve a single secret (prints to stdout)
+fio-vault get api-key
+
 # Check status (shows project + global)
 fio-vault status
 
@@ -85,6 +88,7 @@ const ready = await isConfigured();
 ```
 fio-vault init                 Initialize vault (GPG key + pass store)
 fio-vault set <key> [ENV_VAR]  Add/update a secret
+fio-vault get <key>            Print a decrypted secret to stdout
 fio-vault remove <key>         Remove a secret
 fio-vault status               Show vault status
 fio-vault onboard              Setup on a new machine (import GPG key)
@@ -94,6 +98,61 @@ Options:
   --cwd <path>         Project root directory (default: cwd)
   --help               Show this help
 ```
+
+## Cross-Language Usage
+
+The `get` command prints the raw secret to stdout, making fio-vault usable as a secret provider from any language or tool.
+
+### Shell
+
+```bash
+# Capture into a variable
+API_KEY=$(fio-vault get api-key)
+
+# Pipe to another command
+fio-vault get ssh-key | ssh-add -
+
+# Use inline
+curl -H "Authorization: Bearer $(fio-vault get api-key)" https://api.example.com
+```
+
+### Python
+
+```python
+import subprocess
+
+def get_secret(key: str) -> str:
+    result = subprocess.run(
+        ["fio-vault", "get", key],
+        capture_output=True, text=True, check=True,
+    )
+    return result.stdout
+
+api_key = get_secret("api-key")
+```
+
+### Go
+
+```go
+out, err := exec.Command("fio-vault", "get", "api-key").Output()
+if err != nil {
+    log.Fatal(err)
+}
+apiKey := string(out)
+```
+
+### Ruby
+
+```ruby
+api_key = `fio-vault get api-key`.chomp
+raise "Secret not found" unless $?.success?
+```
+
+The `get` command:
+- Outputs **only** the raw value to stdout (no labels, no trailing newline)
+- Writes errors to stderr
+- Exits with code `1` if the secret is not found
+- Supports `--global` and `--cwd` flags like all other commands
 
 ## Environment Variables
 
@@ -177,7 +236,7 @@ sudo apt install pass
 sudo pacman -S pass
 ```
 
-`pass` is only required for CLI commands (`init`, `set`, `remove`). The library API can decrypt secrets directly with GPG using `FIO_VAULT_PASSPHRASE`.
+`pass` is only required for interactive CLI commands (`init`, `set`, `get`, `remove`). The library API can decrypt secrets directly with GPG using `FIO_VAULT_PASSPHRASE`.
 
 ### pinentry-mac (macOS only)
 

@@ -23,7 +23,7 @@ The codebase is a single-layer library + CLI with no external runtime dependenci
 - **`src/manifest.ts`** — reads/writes `vault/manifest.json` which maps secret keys to env var names
 - **`src/utils.ts`** — pure helpers: path resolution (`getVaultDir`, `getGlobalVaultDir`, `getManifestPath`, `getGpgFilePath`), key validation, key-to-env-var conversion
 - **`src/types.ts`** — shared interfaces (`VaultOptions`, `KeyStatus`)
-- **`src/cli.ts`** — CLI entry point using `util.parseArgs`, commands: `init`, `set`, `remove`, `status`, `onboard`; supports `--global` flag
+- **`src/cli.ts`** — CLI entry point using `util.parseArgs`, commands: `init`, `set`, `get`, `remove`, `status`, `onboard`; supports `--global` flag
 - **`skill/`** — Claude Code skill (SKILL.md + references/workflows.md); installed via `bun run install-skill`
 
 ## Key Patterns

@@ -8,7 +8,7 @@ import { createInterface } from "readline";
 import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured } from "./gpg";
 import { keyToEnvVar, getVaultDir, getGlobalVaultDir, validateKey } from "./utils";
-import { listKeys } from "./vault";
+import { listKeys, getSecret } from "./vault";
 
 // --- Helpers ---
 
@@ -355,6 +355,21 @@ async function cmdOnboard(cwd: string, isGlobal: boolean) {
   console.log("  2. Reload: source ~/.zshrc");
 }
 
+async function cmdGet(key: string, cwd: string, isGlobal: boolean) {
+  if (!(await isConfigured())) {
+    console.error("Vault not configured. Run: fio-vault init");
+    process.exit(1);
+  }
+
+  const effectiveCwd = isGlobal ? getGlobalVaultDir() : cwd;
+  const value = await getSecret(key, { cwd: effectiveCwd, global: !isGlobal });
+  if (value === null) {
+    console.error(`Secret "${key}" not found or decryption failed.`);
+    process.exit(1);
+  }
+  process.stdout.write(value);
+}
+
 // --- Main ---
 
 const USAGE = `fio-vault - GPG-based secret management
@@ -362,6 +377,7 @@ const USAGE = `fio-vault - GPG-based secret management
 Commands:
   init                 Initialize vault (generate GPG key, create vault)
   set <key> [ENV_VAR]  Add or update a secret
+  get <key>            Print a decrypted secret to stdout
   remove <key>         Remove a secret
   status               Show vault status
   onboard              Setup on a new machine (import GPG key)
@@ -394,6 +410,14 @@ const command = positionals[0];
 switch (command) {
   case "init":
     await cmdInit(cwd, isGlobal);
+    break;
+  case "get":
+    if (!positionals[1]) {
+      console.error("Usage: fio-vault get <key>");
+      process.exit(1);
+    }
+    validateKey(positionals[1]);
+    await cmdGet(positionals[1], cwd, isGlobal);
     break;
   case "set":
     if (!positionals[1]) {

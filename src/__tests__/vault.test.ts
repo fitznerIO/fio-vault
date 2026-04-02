@@ -134,6 +134,19 @@ describe("vault", () => {
       const value = await getSecret("nonexistent", { cwd: tmpDir, global: false });
       expect(value).toBeNull();
     });
+
+    test("returns secret with special characters intact", async () => {
+      mockSecrets({ "db-url": "postgres://user:p@ss=w0rd!&special/db?ssl=true" });
+      const value = await getSecret("db-url", { cwd: tmpDir, global: false });
+      expect(value).toBe("postgres://user:p@ss=w0rd!&special/db?ssl=true");
+    });
+
+    test("returns multiline secret intact", async () => {
+      const multiline = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----";
+      mockSecrets({ "ssh-key": multiline });
+      const value = await getSecret("ssh-key", { cwd: tmpDir, global: false });
+      expect(value).toBe(multiline);
+    });
   });
 
   describe("isConfigured", () => {
