@@ -355,19 +355,39 @@ async function cmdOnboard(cwd: string, isGlobal: boolean) {
   console.log("  2. Reload: source ~/.zshrc");
 }
 
-async function cmdGet(key: string, cwd: string, isGlobal: boolean) {
+export async function cmdGet(
+  key: string,
+  cwd: string,
+  isGlobal: boolean,
+  allowRaw: boolean,
+): Promise<number> {
   if (!(await isConfigured())) {
     console.error("Vault not configured. Run: fio-vault init");
-    process.exit(1);
+    return 1;
+  }
+
+  // Guard: never emit the raw secret unless stdout is an interactive TTY (a human
+  // at a terminal) or the caller explicitly opts in with --allow-raw. A non-TTY
+  // stdout means subshell capture `$(…)`, a pipe, a redirect, an agent or CI — the
+  // exact contexts where an accidentally-printed key leaks into a transcript/log.
+  if (!allowRaw && process.stdout.isTTY !== true) {
+    console.error(
+      `Refusing to print raw secret "${key}" to a non-interactive stdout.\n` +
+        `  For agents/scripts, run the command WITH the secret instead of reading it:\n` +
+        `    fio-vault exec --only ${key} -- <command>\n` +
+        `  For legitimate cross-language/CI use, force raw output with --allow-raw.`,
+    );
+    return 3;
   }
 
   const effectiveCwd = isGlobal ? getGlobalVaultDir() : cwd;
   const value = await getSecret(key, { cwd: effectiveCwd, global: !isGlobal });
   if (value === null) {
     console.error(`Secret "${key}" not found or decryption failed.`);
-    process.exit(1);
+    return 1;
   }
   process.stdout.write(value);
+  return 0;
 }
 
 // --- Main ---
@@ -377,7 +397,7 @@ const USAGE = `fio-vault - GPG-based secret management
 Commands:
   init                 Initialize vault (generate GPG key, create vault)
   set <key> [ENV_VAR]  Add or update a secret
-  get <key>            Print a decrypted secret to stdout
+  get <key>            Print a decrypted secret (interactive TTY / --allow-raw only)
   remove <key>         Remove a secret
   status               Show vault status
   onboard              Setup on a new machine (import GPG key)
@@ -385,66 +405,71 @@ Commands:
 Options:
   --global             Use global vault (~/.fio-vault/) instead of project vault
   --cwd <path>         Project root directory (default: cwd)
+  --allow-raw          Allow 'get' to print a raw secret to a non-TTY stdout
   --help               Show this help`;
 
-const { values, positionals } = parseArgs({
-  args: Bun.argv.slice(2),
-  options: {
-    cwd: { type: "string", default: process.cwd() },
-    global: { type: "boolean", default: false },
-    help: { type: "boolean", default: false },
-  },
-  allowPositionals: true,
-  strict: true,
-});
+if (import.meta.main) {
+  const { values, positionals } = parseArgs({
+    args: Bun.argv.slice(2),
+    options: {
+      cwd: { type: "string", default: process.cwd() },
+      global: { type: "boolean", default: false },
+      "allow-raw": { type: "boolean", default: false },
+      help: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: true,
+  });
 
-if (values.help || positionals.length === 0) {
-  console.log(USAGE);
-  process.exit(0);
-}
-
-const cwd = values.cwd as string;
-const isGlobal = values.global as boolean;
-const command = positionals[0];
-
-switch (command) {
-  case "init":
-    await cmdInit(cwd, isGlobal);
-    break;
-  case "get":
-    if (!positionals[1]) {
-      console.error("Usage: fio-vault get <key>");
-      process.exit(1);
-    }
-    validateKey(positionals[1]);
-    await cmdGet(positionals[1], cwd, isGlobal);
-    break;
-  case "set":
-    if (!positionals[1]) {
-      console.error("Usage: fio-vault set <key> [ENV_VAR]");
-      process.exit(1);
-    }
-    validateKey(positionals[1]);
-    await cmdSet(positionals[1], positionals[2], cwd, isGlobal);
-    break;
-  case "remove":
-    if (!positionals[1]) {
-      console.error("Usage: fio-vault remove <key>");
-      process.exit(1);
-    }
-    validateKey(positionals[1]);
-    await cmdRemove(positionals[1], cwd, isGlobal);
-    break;
-  case "status":
-    await cmdStatus(cwd, isGlobal);
-    break;
-  case "onboard":
-    await cmdOnboard(cwd, isGlobal);
-    break;
-  default:
-    console.error(`Unknown command: ${command}`);
+  if (values.help || positionals.length === 0) {
     console.log(USAGE);
-    process.exit(1);
-}
+    process.exit(0);
+  }
 
-closePrompt();
+  const cwd = values.cwd as string;
+  const isGlobal = values.global as boolean;
+  const allowRaw = values["allow-raw"] as boolean;
+  const command = positionals[0];
+
+  switch (command) {
+    case "init":
+      await cmdInit(cwd, isGlobal);
+      break;
+    case "get":
+      if (!positionals[1]) {
+        console.error("Usage: fio-vault get <key>");
+        process.exit(1);
+      }
+      validateKey(positionals[1]);
+      process.exit(await cmdGet(positionals[1], cwd, isGlobal, allowRaw));
+      break;
+    case "set":
+      if (!positionals[1]) {
+        console.error("Usage: fio-vault set <key> [ENV_VAR]");
+        process.exit(1);
+      }
+      validateKey(positionals[1]);
+      await cmdSet(positionals[1], positionals[2], cwd, isGlobal);
+      break;
+    case "remove":
+      if (!positionals[1]) {
+        console.error("Usage: fio-vault remove <key>");
+        process.exit(1);
+      }
+      validateKey(positionals[1]);
+      await cmdRemove(positionals[1], cwd, isGlobal);
+      break;
+    case "status":
+      await cmdStatus(cwd, isGlobal);
+      break;
+    case "onboard":
+      await cmdOnboard(cwd, isGlobal);
+      break;
+    default:
+      console.error(`Unknown command: ${command}`);
+      console.log(USAGE);
+      process.exit(1);
+  }
+
+  closePrompt();
+}
