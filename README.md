@@ -24,8 +24,11 @@ fio-vault set api-key API_KEY
 # Add a global secret (shared across all projects)
 fio-vault set --global npm-token NPM_TOKEN
 
-# Retrieve a single secret (prints to stdout)
-fio-vault get api-key
+# Run a command WITH the secrets injected (the safe path — see "Agents & exec")
+fio-vault exec --only api-key -- bun scripts/sync.ts
+
+# Retrieve a single secret (interactive terminal, or --allow-raw)
+fio-vault get api-key --allow-raw
 
 # Check status (shows project + global)
 fio-vault status
@@ -87,8 +90,9 @@ const ready = await isConfigured();
 
 ```
 fio-vault init                 Initialize vault (GPG key + pass store)
-fio-vault set <key> [ENV_VAR]  Add/update a secret
-fio-vault get <key>            Print a decrypted secret to stdout
+fio-vault set <key> [ENV_VAR]  Add/update a secret (no-echo prompt, or --stdin)
+fio-vault exec -- <cmd...>     Run a command with the vault's secrets injected
+fio-vault get <key>            Print a secret (interactive TTY / --allow-raw only)
 fio-vault remove <key>         Remove a secret
 fio-vault status               Show vault status
 fio-vault onboard              Setup on a new machine (import GPG key)
@@ -96,24 +100,74 @@ fio-vault onboard              Setup on a new machine (import GPG key)
 Options:
   --global             Use global vault (~/.fio-vault/) instead of project vault
   --cwd <path>         Project root directory (default: cwd)
+  --only <k1,k2>       exec: inject only these manifest keys (least privilege)
+  --stdin              set: read the value from stdin (history-safe, no prompt)
+  --allow-raw          get: allow printing a raw secret to a non-TTY stdout
   --help               Show this help
 ```
 
+## Agents & `exec`
+
+fio-vault is built for a world where **LLM agents run the commands**. The threat
+model is the **accidental** exposure of a secret to the agent (a subshell
+capture, a debug print, a stray log, a commit), so the blessed path never hands
+the raw key back.
+
+**Run the command *with* the secret instead of reading the secret:**
+
+```bash
+# ✅ inject the secret into the child; only its output comes back
+fio-vault exec --only api-key -- bun scripts/sync.ts
+
+# ❌ never — the raw token flows through the agent's context / transcript / logs
+API_KEY="$(fio-vault get api-key)" bun scripts/sync.ts
+```
+
+`exec` decrypts internally, injects the secrets into the child's environment
+(stripping `FIO_VAULT_PASSPHRASE`), inherits stdin, streams only the child's
+stdout/stderr, forwards signals, and passes the child's exit code through. The
+raw key never appears on `exec`'s own output. Without `--only` it injects all
+manifest secrets (project + global fallback); `--only k1,k2` is least-privilege.
+If the vault is unusable or a secret cannot be decrypted, `exec` fails loudly and
+the child never starts. See `skill/references/agent-safety.md` for the rationale.
+
+### Entering secrets safely
+
+Secret values are **never** CLI arguments (they would land in shell history and
+`ps`). The interactive `set`/`init`/`onboard` prompts read with **no echo**. For
+automation, pipe the value in history-safely with `--stdin` (one value per call):
+
+```bash
+pass show api-key | fio-vault set api-key --stdin
+fio-vault set api-key --stdin < secret.txt        # chmod 600 the file
+```
+
+**Never** pass a passphrase inline (`FIO_VAULT_PASSPHRASE=… cmd` leaks via shell
+history **and** `ps`) — use the no-echo prompt or set it in your shell config / a
+CI secret.
+
 ## Cross-Language Usage
 
-The `get` command prints the raw secret to stdout, making fio-vault usable as a secret provider from any language or tool.
+The `get` command prints the raw secret to stdout **only at an interactive
+terminal or with `--allow-raw`** (see the guard below), making fio-vault usable
+as a secret provider from any language or tool. From a script, a pipe, or a
+subshell capture, you must opt in with `--allow-raw`.
+
+> Inside an LLM-agent or automation context, prefer `fio-vault exec -- <cmd>`
+> (see [Agents & exec](#agents--exec)) so the raw value never passes through the
+> caller at all. Use `--allow-raw` only for deliberate human/CI cross-language use.
 
 ### Shell
 
 ```bash
 # Capture into a variable
-API_KEY=$(fio-vault get api-key)
+API_KEY=$(fio-vault get api-key --allow-raw)
 
 # Pipe to another command
-fio-vault get ssh-key | ssh-add -
+fio-vault get ssh-key --allow-raw | ssh-add -
 
 # Use inline
-curl -H "Authorization: Bearer $(fio-vault get api-key)" https://api.example.com
+curl -H "Authorization: Bearer $(fio-vault get api-key --allow-raw)" https://api.example.com
 ```
 
 ### Python
@@ -123,7 +177,7 @@ import subprocess
 
 def get_secret(key: str) -> str:
     result = subprocess.run(
-        ["fio-vault", "get", key],
+        ["fio-vault", "get", key, "--allow-raw"],
         capture_output=True, text=True, check=True,
     )
     return result.stdout
@@ -134,7 +188,7 @@ api_key = get_secret("api-key")
 ### Go
 
 ```go
-out, err := exec.Command("fio-vault", "get", "api-key").Output()
+out, err := exec.Command("fio-vault", "get", "api-key", "--allow-raw").Output()
 if err != nil {
     log.Fatal(err)
 }
@@ -144,21 +198,29 @@ apiKey := string(out)
 ### Ruby
 
 ```ruby
-api_key = `fio-vault get api-key`.chomp
+api_key = `fio-vault get api-key --allow-raw`.chomp
 raise "Secret not found" unless $?.success?
 ```
 
 The `get` command:
+- Is **default-safe**: prints the raw value **only** when stdout is an interactive
+  TTY (`process.stdout.isTTY === true`) or `--allow-raw` is passed
+- In any other context (pipe, `$(…)`, redirect, agent, CI) it **refuses**: exits
+  with code **`3`** (distinct from `1` = not found), prints a hint pointing at
+  `exec` and `--allow-raw` to stderr, and writes **nothing** to stdout
 - Outputs **only** the raw value to stdout (no labels, no trailing newline)
-- Writes errors to stderr
-- Exits with code `1` if the secret is not found
-- Supports `--global` and `--cwd` flags like all other commands
+- Writes errors to stderr; exits with code `1` if the secret is not found
+- Supports `--global`, `--cwd`, and `--allow-raw` flags
+
+> **Migration (0.2.0):** `get` no longer prints to a non-TTY by default. Existing
+> `$(fio-vault get …)` calls now exit `3` instead of silently leaking the key —
+> add `--allow-raw` to keep the old behavior, or move to `fio-vault exec`.
 
 ## Environment Variables
 
 | Variable | Purpose |
 |---|---|
-| `FIO_VAULT_PASSPHRASE` | GPG passphrase for non-interactive decryption |
+| `FIO_VAULT_PASSPHRASE` | GPG passphrase for non-interactive decryption. Stripped from the child environment by `fio-vault exec` (least privilege). |
 | `PASSWORD_STORE_DIR` | Override pass store directory (default: `<cwd>/vault/`) |
 
 ## How it works
