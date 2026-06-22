@@ -39,5 +39,7 @@ a log, or a commit.
   instead of silently leaking the key. Add `--allow-raw` to keep the old behavior,
   or move to `fio-vault exec -- <cmd>` so the raw value never passes through the
   caller.
+- Invalid arguments (unknown/ambiguous flags, malformed keys) now fail with a
+  clean one-line message and exit `1` instead of a raw stack trace.
 
 [0.2.0]: https://github.com/fitznerIO/fio-vault/releases/tag/v0.2.0
