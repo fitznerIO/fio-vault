@@ -486,6 +486,7 @@ Options:
   --help               Show this help`;
 
 if (import.meta.main) {
+  try {
   const rawArgs = Bun.argv.slice(2);
   const { values, positionals } = parseArgs({
     args: rawArgs,
@@ -570,4 +571,10 @@ if (import.meta.main) {
   }
 
   closePrompt();
+  } catch (err) {
+    // Surface argument-parse errors (unknown/ambiguous flags) and key-validation
+    // failures as a clean one-line message + exit 1, never a raw stack trace.
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }

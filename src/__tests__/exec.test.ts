@@ -162,6 +162,22 @@ describe("exec", () => {
     expect(readFileSync(outFile, "utf-8")).toBe("[][glob]");
   });
 
+  test("same key in both vaults → project value wins (no-overwrite, first source)", async () => {
+    writeManifest(projectDir, { "api-key": "API_KEY" });
+    touchGpg(projectDir, "api-key");
+    writeManifest(globalDir, { "api-key": "API_KEY" });
+    touchGpg(globalDir, "api-key");
+    // decrypt returns a different value per resolving vault dir
+    decryptSpy.mockImplementation(async (_key: string, opts: any) =>
+      opts?.cwd === projectDir ? "project-wins" : "global-loses",
+    );
+
+    const code = await runExec(writeVar("$API_KEY"), { cwd: projectDir });
+
+    expect(code).toBe(0);
+    expect(readFileSync(outFile, "utf-8")).toBe("project-wins");
+  });
+
   test("decrypt is invoked with the resolving vault dir as cwd", async () => {
     writeManifest(projectDir, { "api-key": "API_KEY" });
     touchGpg(projectDir, "api-key");

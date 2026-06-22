@@ -108,4 +108,61 @@ describe("exec (real process boundary)", () => {
     expect(out + err).not.toContain(SECRET);
     expect(err).toContain("--");
   }, 15_000);
+
+  test("forwards SIGTERM to the child (parent → child)", async () => {
+    const marker = join(projectDir, "term-marker.txt");
+    const ready = join(projectDir, "child-ready.txt");
+    rmSync(marker, { force: true });
+    rmSync(ready, { force: true });
+
+    const proc = Bun.spawn(
+      [
+        "bun",
+        cliPath,
+        "exec",
+        "--cwd",
+        projectDir,
+        "--",
+        "bash",
+        "-c",
+        `trap 'printf got-term > "${marker}"; exit 0' TERM; printf ready > "${ready}"; while true; do sleep 0.05; done`,
+      ],
+      {
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          GNUPGHOME: gnupgDir,
+          FIO_VAULT_PASSPHRASE: PASSPHRASE,
+        },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+
+    // Wait until the child has installed its trap, then signal the exec PARENT.
+    for (let i = 0; i < 150 && !existsSync(ready); i++) await Bun.sleep(20);
+    expect(existsSync(ready)).toBe(true);
+    proc.kill("SIGTERM");
+
+    const code = await proc.exited;
+    // The parent forwarded SIGTERM; the child trapped it and exited 0 cleanly.
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(marker, "utf-8")).toBe("got-term");
+    expect(code).toBe(0);
+  }, 15_000);
+
+  test("malformed flags → clean exit 1, no raw stack trace", async () => {
+    // `--only` with no value before `--` makes parseArgs throw; it must surface
+    // as a one-line message, not an uncaught stack trace.
+    const ambiguous = await runCli(["exec", "--cwd", projectDir, "--only", "--", "env"]);
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.err).not.toMatch(/\bat .*cli\.ts/);
+
+    // An invalid --only key fails key validation cleanly.
+    const badKey = await runCli(["exec", "--cwd", projectDir, "--only", "bad/key", "--", "env"]);
+    expect(badKey.code).toBe(1);
+    expect(badKey.err).toContain("Invalid key");
+    expect(badKey.err).not.toMatch(/\bat .*cli\.ts/);
+  }, 15_000);
 });
