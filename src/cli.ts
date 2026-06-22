@@ -9,6 +9,7 @@ import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured } from "./gpg";
 import { keyToEnvVar, getVaultDir, getGlobalVaultDir, validateKey } from "./utils";
 import { listKeys, getSecret } from "./vault";
+import { runExec } from "./exec";
 
 // --- Helpers ---
 
@@ -29,6 +30,34 @@ function prompt(question: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+/**
+ * Like prompt(), but suppresses the terminal echo of the typed characters while
+ * keeping the prompt text visible — so secret values and passphrases never land
+ * in scrollback or a screen-share. TTY-bound: with no interactive stdout there
+ * is nothing to hide, so it falls back to the normal echoing prompt().
+ */
+function promptSecret(question: string): Promise<string> {
+  if (process.stdout.isTTY !== true) return prompt(question);
+  const rl = getReadline() as any;
+  return new Promise((resolve) => {
+    process.stdout.write(question); // print the prompt ourselves...
+    const originalWrite = rl._writeToOutput.bind(rl);
+    rl._writeToOutput = () => {}; // ...then swallow every echo while reading
+    rl.question("", (answer: string) => {
+      rl._writeToOutput = originalWrite;
+      process.stdout.write("\n"); // terminate the hidden input line
+      resolve(answer.trim());
+    });
+  });
+}
+
+/** Strip exactly one trailing newline (\n or \r\n); leave the rest raw. */
+function stripOneTrailingNewline(s: string): string {
+  if (s.endsWith("\r\n")) return s.slice(0, -2);
+  if (s.endsWith("\n")) return s.slice(0, -1);
+  return s;
 }
 
 /** Close the readline interface so the process can exit cleanly. */
@@ -128,10 +157,18 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
     const sanitizeGpgInput = (s: string) => s.replace(/[\r\n]/g, "").replace(/^%/, "");
     const name = sanitizeGpgInput((await prompt("  Name (Enter = Vault): ")) || "Vault");
     email = sanitizeGpgInput((await prompt("  Email (Enter = vault@project): ")) || "vault@project");
-    const passphrase = sanitizeGpgInput(await prompt("  Passphrase (remember! -> password manager): "));
+    // Passphrase: no-echo + double-entry. Compare on the SANITIZED values, since
+    // the sanitized form is what becomes the real GPG passphrase (cli.ts above).
+    const passphrase = sanitizeGpgInput(await promptSecret("  Passphrase (remember! -> password manager): "));
 
     if (!passphrase) {
       console.error("\n  Passphrase is required.");
+      process.exit(1);
+    }
+
+    const confirmPassphrase = sanitizeGpgInput(await promptSecret("  Confirm passphrase: "));
+    if (passphrase !== confirmPassphrase) {
+      console.error("\n  Passphrases do not match. Aborting (no key generated).");
       process.exit(1);
     }
 
@@ -202,7 +239,7 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
   if (Object.keys(manifest).length > 0) {
     console.log("\nStore secrets (empty input skips):\n");
     for (const [key, envVar] of Object.entries(manifest)) {
-      const value = await prompt(`  ${envVar} (${key}): `);
+      const value = await promptSecret(`  ${envVar} (${key}): `);
       if (!value) {
         console.log(`    -> skipped`);
         continue;
@@ -220,10 +257,16 @@ async function cmdInit(cwd: string, isGlobal: boolean) {
   }
 }
 
-async function cmdSet(key: string, envVar: string | undefined, cwd: string, isGlobal: boolean) {
+export async function cmdSet(
+  key: string,
+  envVar: string | undefined,
+  cwd: string,
+  isGlobal: boolean,
+  useStdin: boolean,
+): Promise<number> {
   if (!(await isPassAvailable())) {
     console.error("pass is not installed. Install with: brew install pass (macOS) or apt install pass (Linux)");
-    process.exit(1);
+    return 1;
   }
 
   const vaultDir = resolveVaultDir(cwd, isGlobal);
@@ -235,22 +278,53 @@ async function cmdSet(key: string, envVar: string | undefined, cwd: string, isGl
   }
 
   const resolvedEnvVar = envVar ?? keyToEnvVar(key);
+  const label = isGlobal ? " (global)" : "";
+
+  // --stdin: read the value ONLY from stdin (history-safe, pipeable). Write the
+  // manifest entry only AFTER a successful store, so an empty/aborted pipe never
+  // leaves an orphaned manifest entry (silent data loss in the advertised use case).
+  if (useStdin) {
+    if (process.stdin.isTTY === true) {
+      console.error("--stdin expects piped/redirected input, not an interactive terminal.");
+      return 1;
+    }
+    const value = stripOneTrailingNewline(await Bun.stdin.text());
+    if (value.length === 0) {
+      console.error("--stdin received empty input; nothing stored, manifest unchanged.");
+      return 1;
+    }
+
+    const { ok, error } = await passInsert(key, value, vaultDir);
+    if (!ok) {
+      console.error(`  -> Error: ${error}`);
+      return 1;
+    }
+
+    const manifest = await loadManifest(manifestCwd);
+    const isUpdate = key in manifest;
+    manifest[key] = resolvedEnvVar;
+    await saveManifest(manifest, manifestCwd);
+    console.log(`${isUpdate ? "Updated" : "Added"}${label}: ${key} -> ${resolvedEnvVar} -> stored`);
+    return 0;
+  }
+
+  // Interactive path: legacy semantics — manifest is updated up front, and an
+  // empty value is allowed ("only manifest"). The value prompt is no-echo.
   const manifest = await loadManifest(manifestCwd);
   const isUpdate = key in manifest;
   manifest[key] = resolvedEnvVar;
   await saveManifest(manifest, manifestCwd);
-
-  const label = isGlobal ? " (global)" : "";
   console.log(`${isUpdate ? "Updated" : "Added"}${label}: ${key} -> ${resolvedEnvVar}`);
 
-  const value = await prompt(`  Value for ${resolvedEnvVar}: `);
+  const value = await promptSecret(`  Value for ${resolvedEnvVar}: `);
   if (!value) {
     console.log("  No value entered - only manifest updated.");
-    return;
+    return 0;
   }
 
   const { ok, error } = await passInsert(key, value, vaultDir);
   console.log(ok ? `  -> stored` : `  -> Error: ${error}`);
+  return ok ? 0 : 1;
 }
 
 async function cmdRemove(key: string, cwd: string, isGlobal: boolean) {
@@ -331,7 +405,7 @@ async function cmdOnboard(cwd: string, isGlobal: boolean) {
   console.log("  GPG key imported");
 
   console.log("\n2/2  Enter passphrase (from password manager):");
-  const passphrase = await prompt("  FIO_VAULT_PASSPHRASE: ");
+  const passphrase = await promptSecret("  FIO_VAULT_PASSPHRASE: ");
   if (!passphrase) {
     console.error("  No passphrase entered.");
     process.exit(1);
@@ -355,19 +429,39 @@ async function cmdOnboard(cwd: string, isGlobal: boolean) {
   console.log("  2. Reload: source ~/.zshrc");
 }
 
-async function cmdGet(key: string, cwd: string, isGlobal: boolean) {
+export async function cmdGet(
+  key: string,
+  cwd: string,
+  isGlobal: boolean,
+  allowRaw: boolean,
+): Promise<number> {
   if (!(await isConfigured())) {
     console.error("Vault not configured. Run: fio-vault init");
-    process.exit(1);
+    return 1;
+  }
+
+  // Guard: never emit the raw secret unless stdout is an interactive TTY (a human
+  // at a terminal) or the caller explicitly opts in with --allow-raw. A non-TTY
+  // stdout means subshell capture `$(…)`, a pipe, a redirect, an agent or CI — the
+  // exact contexts where an accidentally-printed key leaks into a transcript/log.
+  if (!allowRaw && process.stdout.isTTY !== true) {
+    console.error(
+      `Refusing to print raw secret "${key}" to a non-interactive stdout.\n` +
+        `  For agents/scripts, run the command WITH the secret instead of reading it:\n` +
+        `    fio-vault exec --only ${key} -- <command>\n` +
+        `  For legitimate cross-language/CI use, force raw output with --allow-raw.`,
+    );
+    return 3;
   }
 
   const effectiveCwd = isGlobal ? getGlobalVaultDir() : cwd;
   const value = await getSecret(key, { cwd: effectiveCwd, global: !isGlobal });
   if (value === null) {
     console.error(`Secret "${key}" not found or decryption failed.`);
-    process.exit(1);
+    return 1;
   }
   process.stdout.write(value);
+  return 0;
 }
 
 // --- Main ---
@@ -376,8 +470,9 @@ const USAGE = `fio-vault - GPG-based secret management
 
 Commands:
   init                 Initialize vault (generate GPG key, create vault)
-  set <key> [ENV_VAR]  Add or update a secret
-  get <key>            Print a decrypted secret to stdout
+  set <key> [ENV_VAR]  Add or update a secret (no-echo prompt; or --stdin)
+  get <key>            Print a decrypted secret (interactive TTY / --allow-raw only)
+  exec -- <cmd...>     Run a command with the vault's secrets in its environment
   remove <key>         Remove a secret
   status               Show vault status
   onboard              Setup on a new machine (import GPG key)
@@ -385,66 +480,101 @@ Commands:
 Options:
   --global             Use global vault (~/.fio-vault/) instead of project vault
   --cwd <path>         Project root directory (default: cwd)
+  --only <k1,k2>       exec: inject only these manifest keys (least privilege)
+  --stdin              set: read the value from stdin (history-safe, no prompt)
+  --allow-raw          Allow 'get' to print a raw secret to a non-TTY stdout
   --help               Show this help`;
 
-const { values, positionals } = parseArgs({
-  args: Bun.argv.slice(2),
-  options: {
-    cwd: { type: "string", default: process.cwd() },
-    global: { type: "boolean", default: false },
-    help: { type: "boolean", default: false },
-  },
-  allowPositionals: true,
-  strict: true,
-});
+if (import.meta.main) {
+  try {
+  const rawArgs = Bun.argv.slice(2);
+  const { values, positionals } = parseArgs({
+    args: rawArgs,
+    options: {
+      cwd: { type: "string", default: process.cwd() },
+      global: { type: "boolean", default: false },
+      only: { type: "string" },
+      stdin: { type: "boolean", default: false },
+      "allow-raw": { type: "boolean", default: false },
+      help: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+    strict: true,
+  });
 
-if (values.help || positionals.length === 0) {
-  console.log(USAGE);
-  process.exit(0);
-}
-
-const cwd = values.cwd as string;
-const isGlobal = values.global as boolean;
-const command = positionals[0];
-
-switch (command) {
-  case "init":
-    await cmdInit(cwd, isGlobal);
-    break;
-  case "get":
-    if (!positionals[1]) {
-      console.error("Usage: fio-vault get <key>");
-      process.exit(1);
-    }
-    validateKey(positionals[1]);
-    await cmdGet(positionals[1], cwd, isGlobal);
-    break;
-  case "set":
-    if (!positionals[1]) {
-      console.error("Usage: fio-vault set <key> [ENV_VAR]");
-      process.exit(1);
-    }
-    validateKey(positionals[1]);
-    await cmdSet(positionals[1], positionals[2], cwd, isGlobal);
-    break;
-  case "remove":
-    if (!positionals[1]) {
-      console.error("Usage: fio-vault remove <key>");
-      process.exit(1);
-    }
-    validateKey(positionals[1]);
-    await cmdRemove(positionals[1], cwd, isGlobal);
-    break;
-  case "status":
-    await cmdStatus(cwd, isGlobal);
-    break;
-  case "onboard":
-    await cmdOnboard(cwd, isGlobal);
-    break;
-  default:
-    console.error(`Unknown command: ${command}`);
+  if (values.help || positionals.length === 0) {
     console.log(USAGE);
-    process.exit(1);
-}
+    process.exit(0);
+  }
 
-closePrompt();
+  const cwd = values.cwd as string;
+  const isGlobal = values.global as boolean;
+  const allowRaw = values["allow-raw"] as boolean;
+  const command = positionals[0];
+
+  switch (command) {
+    case "init":
+      await cmdInit(cwd, isGlobal);
+      break;
+    case "get":
+      if (!positionals[1]) {
+        console.error("Usage: fio-vault get <key>");
+        process.exit(1);
+      }
+      validateKey(positionals[1]);
+      process.exit(await cmdGet(positionals[1], cwd, isGlobal, allowRaw));
+      break;
+    case "exec": {
+      // `--` is the option terminator: everything after it lands verbatim in
+      // positionals (child argv = positionals after the command). Require it
+      // explicitly so we never mistake a missing separator for an empty child.
+      if (!rawArgs.includes("--")) {
+        console.error(
+          "Usage: fio-vault exec [--only k1,k2] [--global] [--cwd p] -- <command> [args...]",
+        );
+        process.exit(1);
+      }
+      const childArgv = positionals.slice(1);
+      const only = values.only
+        ? (values.only as string).split(",").map((k) => k.trim()).filter(Boolean)
+        : undefined;
+      only?.forEach(validateKey);
+      process.exit(await runExec(childArgv, { only, global: isGlobal, cwd }));
+      break;
+    }
+    case "set":
+      if (!positionals[1]) {
+        console.error("Usage: fio-vault set <key> [ENV_VAR]");
+        process.exit(1);
+      }
+      validateKey(positionals[1]);
+      process.exit(await cmdSet(positionals[1], positionals[2], cwd, isGlobal, values.stdin as boolean));
+      break;
+    case "remove":
+      if (!positionals[1]) {
+        console.error("Usage: fio-vault remove <key>");
+        process.exit(1);
+      }
+      validateKey(positionals[1]);
+      await cmdRemove(positionals[1], cwd, isGlobal);
+      break;
+    case "status":
+      await cmdStatus(cwd, isGlobal);
+      break;
+    case "onboard":
+      await cmdOnboard(cwd, isGlobal);
+      break;
+    default:
+      console.error(`Unknown command: ${command}`);
+      console.log(USAGE);
+      process.exit(1);
+  }
+
+  closePrompt();
+  } catch (err) {
+    // Surface argument-parse errors (unknown/ambiguous flags) and key-validation
+    // failures as a clean one-line message + exit 1, never a raw stack trace.
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
