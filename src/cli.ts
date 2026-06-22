@@ -9,6 +9,7 @@ import { loadManifest, saveManifest } from "./manifest";
 import { isPassAvailable, isConfigured } from "./gpg";
 import { keyToEnvVar, getVaultDir, getGlobalVaultDir, validateKey } from "./utils";
 import { listKeys, getSecret } from "./vault";
+import { runExec } from "./exec";
 
 // --- Helpers ---
 
@@ -398,6 +399,7 @@ Commands:
   init                 Initialize vault (generate GPG key, create vault)
   set <key> [ENV_VAR]  Add or update a secret
   get <key>            Print a decrypted secret (interactive TTY / --allow-raw only)
+  exec -- <cmd...>     Run a command with the vault's secrets in its environment
   remove <key>         Remove a secret
   status               Show vault status
   onboard              Setup on a new machine (import GPG key)
@@ -405,15 +407,18 @@ Commands:
 Options:
   --global             Use global vault (~/.fio-vault/) instead of project vault
   --cwd <path>         Project root directory (default: cwd)
+  --only <k1,k2>       exec: inject only these manifest keys (least privilege)
   --allow-raw          Allow 'get' to print a raw secret to a non-TTY stdout
   --help               Show this help`;
 
 if (import.meta.main) {
+  const rawArgs = Bun.argv.slice(2);
   const { values, positionals } = parseArgs({
-    args: Bun.argv.slice(2),
+    args: rawArgs,
     options: {
       cwd: { type: "string", default: process.cwd() },
       global: { type: "boolean", default: false },
+      only: { type: "string" },
       "allow-raw": { type: "boolean", default: false },
       help: { type: "boolean", default: false },
     },
@@ -443,6 +448,24 @@ if (import.meta.main) {
       validateKey(positionals[1]);
       process.exit(await cmdGet(positionals[1], cwd, isGlobal, allowRaw));
       break;
+    case "exec": {
+      // `--` is the option terminator: everything after it lands verbatim in
+      // positionals (child argv = positionals after the command). Require it
+      // explicitly so we never mistake a missing separator for an empty child.
+      if (!rawArgs.includes("--")) {
+        console.error(
+          "Usage: fio-vault exec [--only k1,k2] [--global] [--cwd p] -- <command> [args...]",
+        );
+        process.exit(1);
+      }
+      const childArgv = positionals.slice(1);
+      const only = values.only
+        ? (values.only as string).split(",").map((k) => k.trim()).filter(Boolean)
+        : undefined;
+      only?.forEach(validateKey);
+      process.exit(await runExec(childArgv, { only, global: isGlobal, cwd }));
+      break;
+    }
     case "set":
       if (!positionals[1]) {
         console.error("Usage: fio-vault set <key> [ENV_VAR]");
