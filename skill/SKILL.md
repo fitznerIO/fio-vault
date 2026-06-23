@@ -50,6 +50,20 @@ output. Without `--only` it injects all manifest secrets (project + global
 fallback); `--only k1,k2` is least-privilege. See
 [references/agent-safety.md](references/agent-safety.md) for the full rationale.
 
+## Which path? — quick decision
+
+Pick by **who runs it**. This is the whole decision; everything below is detail.
+
+| Caller | Path |
+|--------|------|
+| **Agent** runs an ad-hoc command | `fio-vault exec [--only k1,k2] -- <cmd>` — `--only` = least privilege; omit `--only` = all manifest secrets (handy for multi-secret/scripts). **Never** `$(fio-vault get …)`. |
+| **Bun/TS script** reads its own secrets (standalone *or* `bun run`) | `await loadSecrets()` at boot, then read `process.env`. No `exec` wrapper needed; no-overwrite = **env-first**, so it also works *under* `exec`. |
+| **Cross-language script** (Python, shell, …) | env-first, then fallback `fio-vault get <key> --allow-raw` in-process. The **only** place `--allow-raw` belongs (raw value stays in the script's process; only its output returns). |
+| **Human** at an interactive terminal | `fio-vault get <key>` — prints the raw value (TTY-only). |
+
+`$(fio-vault get …)` from an agent or script **fails with exit 3** by design — that
+is the leak it prevents, not a bug to work around.
+
 ## CLI
 
 ```bash
