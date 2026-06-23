@@ -4,6 +4,35 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (0.x: breaking changes may land in a
 minor release).
 
+## [0.3.0] — 2026-06-23
+
+Unattended VPS support. Adds an opt-in passphrase-free key mode so decryption works
+headless (no TTY, no `pinentry`, no `FIO_VAULT_PASSPHRASE`) on a single-user box,
+where an at-rest passphrase is friction without security. Additive and opt-in — the
+default `init`/`onboard` behavior is unchanged.
+
+### Added
+
+- **`fio-vault init --no-passphrase`** — generate a `%no-protection` GPG key (private
+  key unencrypted at rest, guarded only by filesystem permissions). Skips all
+  interactive prompts so it runs headless, prints a loud at-rest warning, and exports
+  `vault.key` without the loopback/passphrase plumbing. The default `init` still
+  requires a passphrase (double-entry, aborts on mismatch).
+- **`fio-vault onboard --no-passphrase`** — import a passphrase-free key without
+  dead-ending at the passphrase prompt, verify decryption with `FIO_VAULT_PASSPHRASE`
+  unset, and skip the "export the passphrase" instructions. The flag is required (no
+  auto-detection: any decrypt probe reads the gpg-agent cache and would misclassify a
+  passphrase-protected key while the agent is warm).
+
+### Notes
+
+- No change to `decrypt()`/`src/gpg.ts`: a `%no-protection` key decrypts through the
+  existing `pass show` path on a cold agent with nothing in the environment. Verified
+  by `src/__tests__/cli-init.test.ts`.
+- `--no-passphrase` makes filesystem permissions the security boundary. Keep
+  `vault.key` out of git and backups; use only on a trusted single-user host. For a
+  multi-user host, use a separate OS user instead.
+
 ## [0.2.0] — 2026-06-22
 
 LLM-safe secret access. Makes the blessed path never hand a raw key back, so an

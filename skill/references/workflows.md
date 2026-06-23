@@ -62,6 +62,22 @@ export FIO_VAULT_PASSPHRASE="<passphrase-from-password-manager>"
 
 Verify: `fio-vault status` — all secrets should show `+`.
 
+### Unattended host (no-passphrase vault)
+
+If the vault was created with `fio-vault init --no-passphrase` (a `%no-protection`
+key for a headless single-user VPS — see SKILL.md), onboard with the flag and skip
+the `FIO_VAULT_PASSPHRASE` step entirely:
+
+```bash
+# vault.key in vault/, then:
+fio-vault onboard --no-passphrase    # imports + verifies; no passphrase to set
+```
+
+The flag is required — without it, onboard prompts for a passphrase (it never
+auto-detects a no-passphrase key, since a decrypt probe would read the gpg-agent
+cache and misjudge a protected key while the agent is warm). Filesystem permissions
+are the security boundary: `chmod 600 vault/vault.key`, never commit or back it up.
+
 ## CI/CD Integration (GitHub Actions)
 
 Set two GitHub Secrets:
