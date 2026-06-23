@@ -95,7 +95,7 @@ fio-vault exec -- <cmd...>     Run a command with the vault's secrets injected
 fio-vault get <key>            Print a secret (interactive TTY / --allow-raw only)
 fio-vault remove <key>         Remove a secret
 fio-vault status               Show vault status
-fio-vault onboard              Setup on a new machine (import GPG key)
+fio-vault onboard              Setup on a new machine (import GPG key; or --no-passphrase)
 
 Options:
   --global             Use global vault (~/.fio-vault/) instead of project vault
@@ -103,6 +103,7 @@ Options:
   --only <k1,k2>       exec: inject only these manifest keys (least privilege)
   --stdin              set: read the value from stdin (history-safe, no prompt)
   --allow-raw          get: allow printing a raw secret to a non-TTY stdout
+  --no-passphrase      init/onboard: unattended key with NO passphrase (see below)
   --help               Show this help
 ```
 
@@ -145,6 +146,59 @@ fio-vault set api-key --stdin < secret.txt        # chmod 600 the file
 **Never** pass a passphrase inline (`FIO_VAULT_PASSPHRASE=… cmd` leaks via shell
 history **and** `ps`) — use the no-echo prompt or set it in your shell config / a
 CI secret.
+
+## Unattended servers: `--no-passphrase`
+
+On a headless, single-user VPS a passphrase-protected key is friction without
+security: every decryption needs either a warm `gpg-agent` (interactive `pinentry`,
+which hangs with no TTY) or `FIO_VAULT_PASSPHRASE` in the environment (itself a
+leakable artifact). On a box where the ciphertext, the private key, and any
+passphrase source all live under the same user, the at-rest passphrase only protects
+an **off-box copy** of the key — not the local process.
+
+`fio-vault init --no-passphrase` generates a `%no-protection` GPG key (the private key
+is stored unencrypted) so decryption Just Works headless — no TTY, no `pinentry`, no
+`FIO_VAULT_PASSPHRASE`. The security boundary becomes **filesystem permissions**.
+
+```bash
+fio-vault init --no-passphrase           # generate an unattended key (loud warning)
+fio-vault onboard --no-passphrase         # import it on the server, no passphrase step
+```
+
+This is **opt-in** — the default `init`/`onboard` still requires a passphrase. When
+you use it:
+
+- `chmod 600 vault/vault.key` and `chmod 700 ~/.gnupg` — these are now the boundary.
+- **Never** commit `vault.key` or include it in off-site backups (only `*.gpg` +
+  `manifest.json` + `.gpg-id` belong in git). A leaked no-passphrase key is directly
+  usable.
+- Use only on a **trusted single-user host**. For a multi-user box, the right answer
+  is a separate OS user, not a passphrase.
+
+> **Note:** this is *not* the same as an empty passphrase. `FIO_VAULT_PASSPHRASE=""`
+> is falsy and silently falls back to the `pass` path — a footgun. A `%no-protection`
+> key is the honest, headless-safe choice.
+
+### Script-side secrets (agents never name a token)
+
+For recurring tasks, put the secret retrieval **inside a committed script** so the
+agent only runs the task name and never names a key:
+
+```ts
+// scripts/sync.ts
+import { loadSecrets } from "fio-vault";
+await loadSecrets();                       // decrypts manifest secrets into process.env
+// ... use process.env.API_KEY
+```
+
+```bash
+# package.json: { "scripts": { "sync": "bun scripts/sync.ts" } }
+bun run sync                               # the agent types this; no key name in its context
+```
+
+The secret name lives only in `manifest.json` and your committed source. Use
+`fio-vault exec --only <key> -- <cmd>` only as the ad-hoc escape hatch for genuine
+one-offs.
 
 ## Cross-Language Usage
 

@@ -52,13 +52,20 @@ cross-language / CI use by a human.
 
 ## `loadSecrets()` vs `getSecret()` (library API)
 
-- **`loadSecrets()` is for app startup** — the application loads *its own* secrets
-  into `process.env` once, at boot, before reading them. That is *not* the way an
-  agent should fetch an ad-hoc value to use in a command. For that, use `exec`.
+- **`loadSecrets()` is for app startup and committed wrapper scripts.** The boundary
+  is *who authored the call*, not the function itself:
+  - An agent that **authors an ad-hoc inline call** to `loadSecrets()`/`getSecret()`
+    and could then log the value = **bad** (no process boundary, nothing guards it).
+  - An agent that merely **invokes a committed, reviewed script** which calls
+    `loadSecrets()` internally = **the best pattern** — the agent runs `bun run sync`,
+    never names a key, and the value never crosses a boundary it observes. Prefer this
+    over `exec` for any recurring task; the secret name stays in `manifest.json` +
+    source, out of the agent's transcript.
+  - Use `exec` as the ad-hoc escape hatch when no committed script exists yet.
 - **`getSecret()` returns the raw value** to the caller, exactly like CLI `get`.
   But it is a library call with **no process boundary**, so it **cannot** be
   guarded the way CLI `get` is. Treat it as app-/human-side only; an agent must
-  not use it to print or capture a key. Use `exec` instead.
+  not author a call that prints or captures a key. Use a wrapper script or `exec`.
 
 ## Honest residual vector
 

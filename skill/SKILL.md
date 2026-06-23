@@ -60,8 +60,26 @@ fio-vault exec [--only k1,k2] [--global] -- <cmd...>   # Run cmd WITH secrets (a
 fio-vault get <key> [--allow-raw]            # Print a secret (interactive/--allow-raw only)
 fio-vault remove <key>                       # Remove secret
 fio-vault status                             # Show all secrets
-fio-vault onboard                            # Import GPG key on new machine
+fio-vault onboard [--no-passphrase]          # Import GPG key on new machine
+fio-vault init --no-passphrase               # Unattended key (headless VPS, see below)
 ```
+
+## Unattended servers + script-side secrets
+
+On a headless single-user VPS, `fio-vault init --no-passphrase` generates a
+`%no-protection` GPG key so decryption works with no TTY, no `pinentry`, and no
+`FIO_VAULT_PASSPHRASE` — the at-rest passphrase is friction without security there
+(the key, ciphertext, and any passphrase all live under the same user). The security
+boundary becomes filesystem permissions: `chmod 600 vault.key`, never commit it, never
+back it up off-box. Opt-in only — the default `init`/`onboard` still require a
+passphrase. (Note: this is a key with NO passphrase, not `FIO_VAULT_PASSPHRASE=""`,
+which is a silent footgun.)
+
+For recurring tasks, prefer a **committed wrapper script** over `exec` so the agent
+never even names a key: put `await loadSecrets()` at the top of `scripts/sync.ts` and
+let the agent run `bun run sync`. The secret name then lives only in `manifest.json`
+and committed source — not in the agent's command or transcript. Use `exec` as the
+ad-hoc escape hatch for genuine one-offs.
 
 Keys: `[a-zA-Z0-9][a-zA-Z0-9._-]*`. If ENV_VAR omitted, hyphens become underscores + uppercase (`api-key` → `API_KEY`). Dots and underscores stay as-is (`db.host` → `DB.HOST`).
 
