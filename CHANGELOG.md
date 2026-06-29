@@ -4,6 +4,22 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (0.x: breaking changes may land in a
 minor release).
 
+## [0.3.1] — 2026-06-29
+
+Documentation fix. Resolves a self-contradiction in the docs about which vault
+files belong in git. No code changes.
+
+### Fixed
+
+- **Git policy docs were self-contradictory.** The README and the Claude Code skill
+  gave two mutually exclusive answers for which vault files belong in git.
+  Standardized on the correct one: `*.gpg` + `manifest.json` + `.gpg-id` are
+  committed; only `vault.key` (the private key) is git-ignored. The encrypted `.gpg`
+  files are safe to commit and are exactly what lets a fresh clone or CI decrypt.
+  Fixes the README file-layout annotations, the "Only `manifest.json` is committed"
+  line, the Security bullet, and the `skill/SKILL.md` convention; adds passphrase-vs-
+  `--no-passphrase` guidance for a git-committed vault. (#1)
+
 ## [0.3.0] — 2026-06-23
 
 Unattended VPS support. Adds an opt-in passphrase-free key mode so decryption works
@@ -71,4 +87,6 @@ a log, or a commit.
 - Invalid arguments (unknown/ambiguous flags, malformed keys) now fail with a
   clean one-line message and exit `1` instead of a raw stack trace.
 
+[0.3.1]: https://github.com/fitznerIO/fio-vault/releases/tag/v0.3.1
+[0.3.0]: https://github.com/fitznerIO/fio-vault/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fitznerIO/fio-vault/releases/tag/v0.2.0
