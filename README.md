@@ -286,13 +286,13 @@ Secrets are stored as GPG-encrypted files alongside a `manifest.json` that maps 
 ~/.fio-vault/vault/            Global vault (shared across projects)
 
 vault/
-  .gpg-id          GPG key ID (git-ignored)
+  .gpg-id          GPG key ID (committed)
   manifest.json    { "api-key": "API_KEY", ... } (committed)
-  api-key.gpg      Encrypted secret (git-ignored)
+  api-key.gpg      Encrypted secret (committed)
   vault.key        Exported private key (git-ignored, for team onboarding)
 ```
 
-Only `manifest.json` is committed to git. All sensitive files (`.gpg-id`, `*.gpg`, `vault.key`) are excluded via `.gitignore`.
+`manifest.json`, `*.gpg` and `.gpg-id` are committed to git. Only `vault.key` (the private key) is excluded via `.gitignore` — the `.gpg` files are encrypted, so committing them is safe and is exactly what lets a fresh clone or CI decrypt.
 
 Decryption uses either `pass` (interactive, via gpg-agent) or direct GPG with `FIO_VAULT_PASSPHRASE` (CI/automation).
 
@@ -314,7 +314,7 @@ This copies `skill/` to `~/.claude/skills/fio-vault/`. Claude Code will then pre
 - Passphrase is passed via stdin to GPG, never visible in process listings
 - Key names are validated against path traversal attacks
 - `manifest.json` is validated against prototype pollution
-- Private keys and encrypted files are excluded from git by default
+- The private key (`vault.key`) is excluded from git by default; the encrypted `*.gpg` files are committed
 
 ## Requirements
 

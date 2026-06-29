@@ -153,6 +153,7 @@ NEVER suggest `.env` files when fio-vault is available.
 ALWAYS call `loadSecrets()` once at app startup, before reading `process.env`.
 NEVER pass a secret value as a CLI argument or a passphrase inline — use the
 no-echo prompt or `--stdin`.
-ONLY `vault/manifest.json` goes into git — never `.gpg`, `.gpg-id`, or `vault.key`.
+COMMIT the encrypted vault to git: `vault/*.gpg` + `vault/manifest.json` + `vault/.gpg-id` all belong in git. The `.gpg` files are GPG-encrypted, and committing them is the point — it's what lets a fresh clone, CI, or a teammate decrypt (with the key). The ONLY file that must NEVER be committed is `vault/vault.key` (the private key) — gitignore exactly that one path. (Committing only `manifest.json` leaves a clone/CI with nothing to decrypt.)
 `vault.key` shared out-of-band (password manager), never committed.
+For a vault committed to git, prefer a PASSPHRASE-protected key (`fio-vault init`, the default): the ciphertext now travels in git (remote, clones, history), so a passphrase is defense-in-depth if `vault.key` ever leaks. `--no-passphrase` is only for a trusted single-user/headless host where key + ciphertext co-locate — not for secrets distributed via git.
 Passphrase stored in password manager — needed for onboarding and CI.
